@@ -40,6 +40,9 @@ no_translator = "未选择翻译器"
 drop_hint = "拖入图片或文档以进行翻译"
 no_service_message = "未配置翻译服务。"
 no_service_action = "打开服务设置"
+service_latency_probing = "测量中..."
+service_latency_ok = "响应时间: %s 毫秒"
+service_latency_failed = "翻译失败"
 
 [main_window_history_bar]
 backward_tooltip = "返回翻译历史"

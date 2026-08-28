@@ -8,6 +8,7 @@ import com.github.ahatem.qtranslate.api.spellchecker.Correction
 import com.github.ahatem.qtranslate.core.history.HistorySnapshot
 import com.github.ahatem.qtranslate.core.document.DocumentTranslationProgress
 import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
+import com.github.ahatem.qtranslate.core.main.domain.model.ServiceLatency
 import com.github.ahatem.qtranslate.api.plugin.ServiceRole
 import com.github.ahatem.qtranslate.core.shared.arch.UiState
 
@@ -30,6 +31,8 @@ import com.github.ahatem.qtranslate.core.shared.arch.UiState
  *   reports a detected language.
  * @property targetLanguage The currently selected target language.
  * @property availableServices All services currently loaded from plugins and not disabled.
+ * @property serviceLatencies How each translation service answered the startup probe, keyed by
+ *   service id. A service absent from the map has not been probed.
  * @property availableLanguages Languages supported by the active translator,
  *   sorted with AUTO first then alphabetically.
  * @property history Ordered list of past translation snapshots.
@@ -49,6 +52,7 @@ data class MainState(
     val detectedSourceLanguage: LanguageCode? = null,
     val targetLanguage: LanguageCode = LanguageCode.ARABIC,
     val availableServices: List<ServiceInfo> = emptyList(),
+    val serviceLatencies: Map<String, ServiceLatency> = emptyMap(),
     val availableLanguages: List<LanguageCode> = emptyList(),
     /**
      * Options declared by the active service for each capability, for the pickers that offer

@@ -39,6 +39,9 @@ no_translator = "Không có trình dịch"
 drop_hint = "Thả một hình ảnh hoặc tài liệu để dịch"
 no_service_message = "Chưa cấu hình dịch vụ dịch thuật nào."
 no_service_action = "Mở cài đặt Dịch vụ"
+service_latency_probing = "Đang đo..."
+service_latency_ok = "Thời gian phản hồi: %s ms"
+service_latency_failed = "Lỗi dịch"
 
 [main_window_history_bar]
 backward_tooltip = "Quay lại lịch sử dịch"

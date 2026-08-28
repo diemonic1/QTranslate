@@ -14,12 +14,15 @@ import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
 import com.github.ahatem.qtranslate.plugins.common.ApiConfig
 import com.github.ahatem.qtranslate.plugins.common.createJsonParser
 import com.github.ahatem.qtranslate.plugins.google.common.GoogleLanguageMapper
+import com.github.ahatem.qtranslate.plugins.google.common.translateSingleUrl
+import com.github.ahatem.qtranslate.plugins.google.common.TRANSLATE_CLIENT_ID
 import com.github.ahatem.qtranslate.plugins.google.common.TranslateResponse
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.coroutines.coroutineBinding
 
 class GoogleDictionaryService(
     private val pluginContext: PluginContext,
+    private val settings: GoogleSettings,
     private val httpClient: HttpClient,
     private val languageMapper: GoogleLanguageMapper,
     private val apiConfig: ApiConfig
@@ -34,7 +37,6 @@ class GoogleDictionaryService(
     private val parser = createJsonParser<TranslateResponse>(pluginContext)
 
     companion object {
-        private const val TRANSLATE_PRIMARY = "https://translate.googleapis.com/translate_a/single"
         private val DICTIONARY_FEATURES = listOf("bd", "ex", "md")
     }
 
@@ -48,10 +50,10 @@ class GoogleDictionaryService(
             val langTag = languageMapper.toProviderCode(request.language)
 
             val responseString = httpClient.get(
-                url = TRANSLATE_PRIMARY,
+                url = translateSingleUrl(settings.translateHost),
                 headers = apiConfig.createHeaders(),
                 queryParams = mapOf(
-                    "client" to "gtx",
+                    "client" to TRANSLATE_CLIENT_ID,
                     "dj" to 1,
                     "dt" to DICTIONARY_FEATURES,
                     "sl" to langTag,

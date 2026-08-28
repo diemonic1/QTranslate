@@ -40,6 +40,9 @@ no_translator = "Перекладач не вибрано"
 drop_hint = "Перетягніть зображення або документ для перекладу"
 no_service_message = "Службу перекладу не налаштовано."
 no_service_action = "Відкрити налаштування служб"
+service_latency_probing = "Вимірювання..."
+service_latency_ok = "Час відповіді: %s мс"
+service_latency_failed = "Помилка перекладу"
 
 [main_window_history_bar]
 backward_tooltip = "Назад в історії перекладів"

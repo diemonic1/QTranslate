@@ -40,6 +40,9 @@ no_translator = "Çevirmen Yok"
 drop_hint = "Çevrilecek bir resmi veya belgeyi bırakın"
 no_service_message = "Yapılandırılmış çeviri hizmeti yok."
 no_service_action = "Hizmetler ayarlarını aç"
+service_latency_probing = "Ölçülüyor..."
+service_latency_ok = "Yanıt süresi: %s ms"
+service_latency_failed = "Çeviri hatası"
 
 [main_window_history_bar]
 backward_tooltip = "Çeviri geçmişinde geri git"

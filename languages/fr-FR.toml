@@ -40,6 +40,9 @@ no_translator = "Aucun traducteur"
 drop_hint = "Déposez une image ou un document à traduire"
 no_service_message = "Aucun service de traduction configuré."
 no_service_action = "Ouvrir les paramètres des services"
+service_latency_probing = "Mesure..."
+service_latency_ok = "Temps de réponse : %s ms"
+service_latency_failed = "Échec de la traduction"
 
 [main_window_history_bar]
 backward_tooltip = "Reculer dans l'historique de traduction"

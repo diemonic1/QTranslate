@@ -6,6 +6,7 @@ import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import com.github.ahatem.qtranslate.core.localization.getDisplayName
 import com.github.ahatem.qtranslate.core.main.mvi.MainIntent
+import com.github.ahatem.qtranslate.core.main.domain.model.ServiceLatency
 import com.github.ahatem.qtranslate.core.main.mvi.MainState
 import com.github.ahatem.qtranslate.core.settings.data.Configuration
 import com.github.ahatem.qtranslate.core.settings.data.ExtraOutputType
@@ -481,7 +482,8 @@ class MainContentView(
                 availableServices = mainState.availableServices,
                 selectedServices = activePreset?.selectedServices.orEmpty(),
                 style = config.serviceSelectorStyle,
-                appearance = config.serviceSelectorAppearance
+                appearance = config.serviceSelectorAppearance,
+                latencyNotes = mainState.serviceLatencies.mapValues { (_, latency) -> phrase(latency) }
             )
         )
 
@@ -759,6 +761,20 @@ class MainContentView(
      */
     private fun showImagesForWord(word: String, language: LanguageCode = currentLookupLanguage) {
         dispatch(MainIntent.ShowImageSearch(word, language))
+    }
+
+    /**
+     * How a measured service reads in the picker, in the user's language.
+     *
+     * A failure deliberately says only that the translation failed. The use case knows whether the
+     * service timed out, errored, or answered with the wrong word, but that distinction is for the
+     * log: someone choosing between services needs to know which ones work, and three ways of
+     * saying "not this one" only makes that harder to see.
+     */
+    private fun phrase(latency: ServiceLatency): String = when (latency) {
+        is ServiceLatency.Probing  -> localizer.getString("main_window.service_latency_probing")
+        is ServiceLatency.Answered -> localizer.getString("main_window.service_latency_ok", latency.millis)
+        is ServiceLatency.Failed   -> localizer.getString("main_window.service_latency_failed")
     }
 
     private fun showDictionaryWithWord(word: String, language: LanguageCode = currentLookupLanguage) {

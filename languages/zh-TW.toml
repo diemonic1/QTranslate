@@ -39,6 +39,9 @@ no_translator = "未選擇翻譯器"
 drop_hint = "拖曳圖片或文件至此進行翻譯"
 no_service_message = "未設定翻譯服務。"
 no_service_action = "開啟服務設定"
+service_latency_probing = "測量中..."
+service_latency_ok = "回應時間: %s 毫秒"
+service_latency_failed = "翻譯失敗"
 
 [main_window_history_bar]
 backward_tooltip = "返回翻譯歷史紀錄"

@@ -40,6 +40,9 @@ no_translator = "Переводчик не выбран"
 drop_hint = "Перетащите изображение или документ для перевода"
 no_service_message = "Служба перевода не настроена."
 no_service_action = "Открыть настройки служб"
+service_latency_probing = "Измерение..."
+service_latency_ok = "Время ответа: %s мс"
+service_latency_failed = "Ошибка перевода"
 
 [main_window_history_bar]
 backward_tooltip = "Назад по истории переводов"

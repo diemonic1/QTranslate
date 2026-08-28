@@ -12,6 +12,7 @@ import com.github.ahatem.qtranslate.core.main.domain.usecase.SwapLanguagesUseCas
 import com.github.ahatem.qtranslate.core.main.domain.usecase.LookupWordUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.SearchImagesUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.FetchInlineDefinitionUseCase
+import com.github.ahatem.qtranslate.core.main.domain.usecase.MeasureServiceLatencyUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.RewriteUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.SummarizeUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.TranslateStringUseCase
@@ -281,7 +282,11 @@ suspend fun buildDependencies(
         lookupWordUseCase          = lookupWordUseCase,
         searchImagesUseCase        = searchImagesUseCase,
         fetchInlineDefinitionUseCase = fetchInlineDefinitionUseCase,
-        documentTranslationUseCase = DocumentTranslationUseCase(activeServiceManager, loggerFactory)
+        documentTranslationUseCase = DocumentTranslationUseCase(activeServiceManager, loggerFactory),
+        measureServiceLatencyUseCase = MeasureServiceLatencyUseCase(
+            activeServices = pluginManager.activeServices,
+            loggerFactory  = loggerFactory
+        )
     )
 
     return AppDependencies(

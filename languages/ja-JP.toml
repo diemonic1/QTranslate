@@ -40,6 +40,9 @@ no_translator = "翻訳エンジン未選択"
 drop_hint = "翻訳する画像や文書をドロップしてください"
 no_service_message = "翻訳サービスが設定されていません。"
 no_service_action = "サービス設定を開く"
+service_latency_probing = "測定中..."
+service_latency_ok = "応答時間: %s ミリ秒"
+service_latency_failed = "翻訳エラー"
 
 [main_window_history_bar]
 backward_tooltip = "前の翻訳に戻る"

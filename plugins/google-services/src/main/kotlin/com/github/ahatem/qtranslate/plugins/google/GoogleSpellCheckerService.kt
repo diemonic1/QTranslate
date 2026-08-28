@@ -14,6 +14,8 @@ import com.github.ahatem.qtranslate.api.spellchecker.SpellChecker
 import com.github.ahatem.qtranslate.plugins.common.ApiConfig
 import com.github.ahatem.qtranslate.plugins.common.createJsonParser
 import com.github.ahatem.qtranslate.plugins.google.common.GoogleLanguageMapper
+import com.github.ahatem.qtranslate.plugins.google.common.translateSingleUrl
+import com.github.ahatem.qtranslate.plugins.google.common.TRANSLATE_CLIENT_ID
 import com.github.ahatem.qtranslate.plugins.google.common.TranslateResponse
 import com.github.michaelbull.result.*
 import com.github.michaelbull.result.coroutines.coroutineBinding
@@ -24,6 +26,7 @@ import java.util.*
 
 class GoogleSpellCheckerService(
     private val pluginContext: PluginContext,
+    private val settings: GoogleSettings,
     private val httpClient: HttpClient,
     private val languageMapper: GoogleLanguageMapper,
     private val apiConfig: ApiConfig
@@ -45,7 +48,6 @@ class GoogleSpellCheckerService(
     })
 
     companion object {
-        private const val TRANSLATE_PRIMARY = "https://translate.googleapis.com/translate_a/single"
     }
 
     override val supportedLanguages: SupportedLanguages = SupportedLanguages.Dynamic
@@ -116,10 +118,10 @@ class GoogleSpellCheckerService(
         return coroutineBinding {
             val langTag = languageMapper.toProviderCode(language)
             val responseString = httpClient.get(
-                url = TRANSLATE_PRIMARY,
+                url = translateSingleUrl(settings.translateHost),
                 headers = apiConfig.createHeaders(),
                 queryParams = mapOf(
-                    "client" to "gtx",
+                    "client" to TRANSLATE_CLIENT_ID,
                     "dj" to 1,
                     "sl" to langTag,
                     "tl" to "zu",

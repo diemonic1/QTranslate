@@ -14,9 +14,14 @@ import com.github.ahatem.qtranslate.plugins.common.createJsonParser
 import com.github.ahatem.qtranslate.plugins.common.fetchJson
 import com.github.ahatem.qtranslate.plugins.common.sendJson
 import com.github.ahatem.qtranslate.plugins.google.common.GoogleLanguageMapper
+import com.github.ahatem.qtranslate.plugins.google.common.translateSingleUrl
+import com.github.ahatem.qtranslate.plugins.google.common.TRANSLATE_CLIENT_ID
 import com.github.ahatem.qtranslate.plugins.google.common.OfficialTranslateResponse
 import com.github.ahatem.qtranslate.plugins.google.common.TranslateResponse
 import com.github.michaelbull.result.Result
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import com.github.michaelbull.result.coroutines.coroutineBinding
 import com.github.michaelbull.result.toResultOr
 
@@ -40,7 +45,6 @@ class GoogleTranslatorService(
     override val supportedLanguages: SupportedLanguages = SupportedLanguages.Dynamic
 
     companion object {
-        private const val TRANSLATE_PRIMARY = "https://translate.googleapis.com/translate_a/single"
         private const val TRANSLATE_FALLBACK = "https://clients5.google.com/translate_a/t"
         private const val TRANSLATE_OFFICIAL = "https://translation.googleapis.com/language/translate/v2"
         private val TRANSLATE_FEATURES = listOf("t", "bd", "at", "ex", "ld", "md", "rw", "rm", "ss", "qc")
@@ -111,10 +115,10 @@ class GoogleTranslatorService(
         targetTag: String
     ): Result<TranslationResponse, ServiceError> = coroutineBinding {
         val responseString = httpClient.get(
-            url = TRANSLATE_PRIMARY,
+            url = translateSingleUrl(settings.translateHost),
             headers = apiConfig.createHeaders(),
             queryParams = mapOf(
-                "client" to "gtx",
+                "client" to TRANSLATE_CLIENT_ID,
                 "ie" to "UTF-8",
                 "oe" to "UTF-8",
                 "dj" to 1,
@@ -142,11 +146,11 @@ class GoogleTranslatorService(
         sourceTag: String,
         targetTag: String
     ): Result<TranslationResponse, ServiceError> = coroutineBinding {
-        val parsed: List<List<String>> = httpClient.fetchJson<List<List<String>>>(
+        val parsed: JsonArray = httpClient.fetchJson<JsonArray>(
             url = TRANSLATE_FALLBACK,
             headers = apiConfig.createHeaders(),
             queryParams = mapOf(
-                "client" to "dict-chrome-ex",
+                "client" to TRANSLATE_CLIENT_ID,
                 "dj" to 1,
                 "sl" to sourceTag,
                 "tl" to targetTag,
@@ -154,17 +158,48 @@ class GoogleTranslatorService(
             )
         ).bind()
 
-        val translatedText = parsed.getOrNull(0)?.getOrNull(0)
+        val (translated, detectedTag) = readFallbackTranslation(parsed)
+
+        val translatedText = translated
             .toResultOr { ServiceError.InvalidResponseError("No translation in fallback response", null) }
             .bind()
 
-        val detectedLang = parsed.getOrNull(0)?.getOrNull(1)
-            ?.let { languageMapper.fromProviderCode(it) }
+        val detectedLang = detectedTag?.let { languageMapper.fromProviderCode(it) }
 
         TranslationResponse(
             translatedText = translatedText.trim(),
             detectedLanguage = detectedLang
         )
     }
+
+    /**
+     * Reads the translation and detected language out of whichever shape the fallback returned.
+     *
+     * This endpoint answers in two different shapes depending on the request, and the difference
+     * is not documented anywhere:
+     *
+     * ```
+     * sl=auto  ->  [["transcription","de"]]   nested, carries the detected language
+     * sl=de    ->  ["transcription"]          flat, no language to report
+     * ```
+     *
+     * Only the nested form was handled, and the type it was decoded into made the flat one a
+     * parse failure rather than a missing field — so naming a source language explicitly, instead
+     * of leaving it on auto-detect, silently cost the user the fallback entirely. It went
+     * unnoticed because auto-detect is the default, and it only bites once the primary endpoint
+     * has already failed, which is exactly when the fallback is the last thing standing.
+     *
+     * Decoded as a [JsonArray] rather than a typed shape because the two forms have no common
+     * static type: the outer array holds a string in one and an array in the other.
+     */
+    private fun readFallbackTranslation(parsed: JsonArray): Pair<String?, String?> =
+        when (val first = parsed.firstOrNull()) {
+            is JsonArray -> first.getOrNull(0)?.contentOrNull() to first.getOrNull(1)?.contentOrNull()
+            is JsonPrimitive -> first.contentOrNull() to null
+            else -> null to null
+        }
+
+    /** The element's text, or null when it is not a plain string — `JSON null` included. */
+    private fun JsonElement.contentOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 }

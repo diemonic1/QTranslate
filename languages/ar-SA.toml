@@ -40,6 +40,9 @@ no_translator = "لا يوجد مترجم"
 drop_hint = "أفلت صورة أو مستندًا لترجمته"
 no_service_message = "لم يتم تكوين أي خدمة ترجمة."
 no_service_action = "فتح إعدادات الخدمات"
+service_latency_probing = "جارٍ القياس..."
+service_latency_ok = "زمن الاستجابة: %s مللي ثانية"
+service_latency_failed = "فشل الترجمة"
 
 [main_window_history_bar]
 backward_tooltip = "الرجوع للخلف في سجل الترجمة"

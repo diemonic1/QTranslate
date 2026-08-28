@@ -40,6 +40,9 @@ no_translator = "Nincs fordító"
 drop_hint = "Húzzon ide képet vagy dokumentumot a fordításhoz"
 no_service_message = "Nincs beállítva fordítási szolgáltatás."
 no_service_action = "Szolgáltatások beállításai"
+service_latency_probing = "Mérés..."
+service_latency_ok = "Válaszidő: %s ms"
+service_latency_failed = "Fordítási hiba"
 
 [main_window_history_bar]
 backward_tooltip = "Menjen vissza a fordítási előzményekben"

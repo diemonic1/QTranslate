@@ -13,12 +13,14 @@ import com.github.ahatem.qtranslate.api.tts.TTSResponse
 import com.github.ahatem.qtranslate.api.tts.TextToSpeech
 import com.github.ahatem.qtranslate.plugins.common.ApiConfig
 import com.github.ahatem.qtranslate.plugins.google.common.GoogleLanguageMapper
+import com.github.ahatem.qtranslate.plugins.google.common.translateTtsUrl
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.coroutines.coroutineBinding
 import com.github.michaelbull.result.getOrElse
 
 class GoogleTTSService(
     private val pluginContext: PluginContext,
+    private val settings: GoogleSettings,
     private val httpClient: HttpClient,
     private val languageMapper: GoogleLanguageMapper,
     private val apiConfig: ApiConfig
@@ -38,7 +40,6 @@ class GoogleTTSService(
         languageMapper.getSupportedLanguages()
 
     companion object {
-        private const val TTS_ENDPOINT = "https://translate.googleapis.com/translate_tts"
         private const val MAX_CHUNK_LENGTH = 200
     }
 
@@ -73,7 +74,7 @@ class GoogleTTSService(
         val audioChunks = mutableListOf<ByteArray>()
         for ((idx, chunk) in chunks.withIndex()) {
             val bytes = httpClient.getBytes(
-                url = TTS_ENDPOINT,
+                url = translateTtsUrl(settings.translateHost),
                 headers = apiConfig.createHeaders(),
                 queryParams = mapOf(
                     "client" to "gtx",
@@ -98,7 +99,7 @@ class GoogleTTSService(
         val audioChunks = mutableListOf<ByteArray>()
         for (chunk in chunks) {
             val bytes = httpClient.getBytes(
-                url = TTS_ENDPOINT,
+                url = translateTtsUrl(settings.translateHost),
                 headers = apiConfig.createHeaders(),
                 queryParams = mapOf(
                     "client" to "tw-ob",

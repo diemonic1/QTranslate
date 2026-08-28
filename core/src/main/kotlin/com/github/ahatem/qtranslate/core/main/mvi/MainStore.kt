@@ -7,6 +7,9 @@ import com.github.ahatem.qtranslate.core.document.DocumentTranslationRequest
 import com.github.ahatem.qtranslate.core.document.DocumentTranslationUseCase
 import com.github.ahatem.qtranslate.core.history.HistoryRepository
 import com.github.ahatem.qtranslate.core.localization.getDisplayName
+import com.github.ahatem.qtranslate.api.plugin.ServiceRole
+import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
+import com.github.ahatem.qtranslate.core.main.domain.model.ServiceLatency
 import com.github.ahatem.qtranslate.core.main.domain.usecase.*
 import com.github.ahatem.qtranslate.core.settings.data.Configuration
 import com.github.ahatem.qtranslate.core.settings.data.TextSource
@@ -57,7 +60,8 @@ class MainStore(
     private val lookupWordUseCase: LookupWordUseCase,
     private val searchImagesUseCase: SearchImagesUseCase,
     private val fetchInlineDefinitionUseCase: FetchInlineDefinitionUseCase,
-    private val documentTranslationUseCase: DocumentTranslationUseCase
+    private val documentTranslationUseCase: DocumentTranslationUseCase,
+    private val measureServiceLatencyUseCase: MeasureServiceLatencyUseCase
 ) : Store<MainState, MainIntent, MainEvent> {
 
     private var documentTranslationJob: Job? = null
@@ -83,6 +87,7 @@ class MainStore(
         observeSpellChecking()
         observeTtsPlayback()
         checkForUpdates()
+        probeServiceLatencies()
     }
 
     // -------------------------------------------------------------------------
@@ -185,6 +190,35 @@ class MainStore(
             ) { text, isEnabled -> text to isEnabled }
                 .debounce(AppConstants.SPELL_CHECK_DEBOUNCE_MS)
                 .collect { (text, isEnabled) -> handleSpellCheck(text, isEnabled) }
+        }
+    }
+
+    /**
+     * Times every translator once, as soon as the plugins that provide them have loaded.
+     *
+     * Waits for the first non-empty list rather than reading the state now, because plugins load
+     * asynchronously and this runs during construction: reading immediately probed nothing at all.
+     * `first` suspends until there is something to measure and then lets the coroutine finish, so
+     * this happens once per run and does not re-probe every time the service list is rebuilt.
+     *
+     * Every service is marked [ServiceLatency.Probing] up front so the picker can say it is
+     * measuring, instead of showing nothing for up to seven seconds and looking broken.
+     */
+    private fun probeServiceLatencies() {
+        scope.launch {
+            val translators = state
+                .map { current -> current.getAvailableServicesFor(ServiceRole.TRANSLATOR).map(ServiceInfo::id) }
+                .first { it.isNotEmpty() }
+
+            _state.update { current ->
+                current.copy(serviceLatencies = translators.associateWith { ServiceLatency.Probing })
+            }
+
+            measureServiceLatencyUseCase(translators) { serviceId, latency ->
+                _state.update { current ->
+                    current.copy(serviceLatencies = current.serviceLatencies + (serviceId to latency))
+                }
+            }
         }
     }
 
