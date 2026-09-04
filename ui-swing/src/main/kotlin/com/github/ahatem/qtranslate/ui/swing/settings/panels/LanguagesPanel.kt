@@ -58,6 +58,14 @@ class LanguagesPanel(
         localizer = localizationManager
     )
 
+    /** Where a translation goes when the default target is the language being translated from. */
+    private val secondaryTargetCombo = LanguageComboBox(
+        onLanguageSelected = { lang ->
+            if (!isUpdatingFromState) applyDraft(store) { it.copy(secondaryTargetLanguage = lang.tag) }
+        },
+        localizer = localizationManager
+    )
+
     // Individual checkboxes — see class-level doc for why not JList
     private val languageCheckBoxes = mutableListOf<Pair<String, JCheckBox>>()
 
@@ -87,7 +95,16 @@ class LanguagesPanel(
             localizationManager.getString("settings_languages.default_target_language"),
             defaultTargetCombo
         )
+        // Each hint sits under the rows it explains. Collected at the end of the group they
+        // read as a wall of text belonging to nothing in particular, and the secondary
+        // language — the one setting here whose purpose is not obvious from its label — was
+        // the furthest of all from its own explanation.
         addHint(localizationManager.getString("settings_languages.defaults_hint"))
+        addRow(
+            localizationManager.getString("settings_languages.secondary_target_language"),
+            secondaryTargetCombo
+        )
+        addHint(localizationManager.getString("settings_languages.secondary_target_hint"))
 
         // ---- Pinned Languages ----
         addSeparator(localizationManager.getString("settings_languages.pinned_languages_group"))
@@ -304,6 +321,12 @@ class LanguagesPanel(
             defaultTargetCombo.render(
                 availableLanguages   = targets,
                 selectedLanguage     = LanguageCode(c.preferredTargetLanguage),
+                autoDetectedLanguage = null,
+                isEnabled            = targets.isNotEmpty()
+            )
+            secondaryTargetCombo.render(
+                availableLanguages   = targets,
+                selectedLanguage     = LanguageCode(c.secondaryTargetLanguage),
                 autoDetectedLanguage = null,
                 isEnabled            = targets.isNotEmpty()
             )

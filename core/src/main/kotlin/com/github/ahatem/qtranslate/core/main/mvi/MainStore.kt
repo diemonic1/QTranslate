@@ -6,6 +6,8 @@ import com.github.ahatem.qtranslate.core.document.DocumentTranslationException
 import com.github.ahatem.qtranslate.core.document.DocumentTranslationRequest
 import com.github.ahatem.qtranslate.core.document.DocumentTranslationUseCase
 import com.github.ahatem.qtranslate.core.history.HistoryRepository
+import com.github.ahatem.qtranslate.core.keyboard.KeyboardLayoutText
+import com.github.ahatem.qtranslate.core.keyboard.KeyboardLayouts
 import com.github.ahatem.qtranslate.core.localization.getDisplayName
 import com.github.ahatem.qtranslate.api.plugin.ServiceRole
 import com.github.ahatem.qtranslate.core.main.domain.model.ServiceInfo
@@ -61,7 +63,9 @@ class MainStore(
     private val searchImagesUseCase: SearchImagesUseCase,
     private val fetchInlineDefinitionUseCase: FetchInlineDefinitionUseCase,
     private val documentTranslationUseCase: DocumentTranslationUseCase,
-    private val measureServiceLatencyUseCase: MeasureServiceLatencyUseCase
+    private val measureServiceLatencyUseCase: MeasureServiceLatencyUseCase,
+    /** The layouts installed in the OS; [KeyboardLayouts.Unavailable] where none can be read. */
+    private val keyboardLayouts: KeyboardLayouts
 ) : Store<MainState, MainIntent, MainEvent> {
 
     private var documentTranslationJob: Job? = null
@@ -86,6 +90,7 @@ class MainStore(
         observeInstantTranslation()
         observeSpellChecking()
         observeTtsPlayback()
+        observePreferredTargetLanguage()
         checkForUpdates()
         probeServiceLatencies()
     }
@@ -181,6 +186,35 @@ class MainStore(
         }
     }
 
+    /**
+     * Follows the default target language when it is changed in Settings.
+     *
+     * The screen's target language is seeded from this setting once, at startup, and after that
+     * the two drift apart: changing the default in Settings updated the configuration but left
+     * the running session pointed at the old language, so the change only appeared after a
+     * restart. Worse than being ignored, it was ignored *silently* — and the secondary-language
+     * rule compares the detected source against this very language, so a stale value there made
+     * a translation come out in the wrong language rather than merely the unexpected one.
+     *
+     * Choosing a language in the main window writes the same setting, so this observer sees its
+     * own value come back and changes nothing — the two paths agree rather than fight.
+     */
+    private fun observePreferredTargetLanguage() {
+        scope.launch {
+            settingsState
+                .map { LanguageCode(it.preferredTargetLanguage) }
+                .distinctUntilChanged()
+                .collect { preferred ->
+                    _state.update { current ->
+                        if (current.targetLanguage == preferred) current
+                        // Deliberately clears isTargetFromRule: this is the user stating a
+                        // preference, which outranks a target some earlier rule worked out.
+                        else current.copy(targetLanguage = preferred, isTargetFromRule = false)
+                    }
+                }
+        }
+    }
+
     @OptIn(FlowPreview::class)
     private fun observeSpellChecking() {
         scope.launch {
@@ -259,8 +293,10 @@ class MainStore(
             is MainIntent.SelectSourceLanguage ->
                 _state.update { it.copy(sourceLanguage = intent.language, detectedSourceLanguage = null) }
 
+            // Picking a target by hand makes it the standing choice, which the next translation
+            // inherits. Clearing the flag is what separates it from a target a rule produced.
             is MainIntent.SelectTargetLanguage ->
-                _state.update { it.copy(targetLanguage = intent.language) }
+                _state.update { it.copy(targetLanguage = intent.language, isTargetFromRule = false) }
 
             is MainIntent.ApplyCorrection ->
                 _state.update { it.copy(inputText = it.inputText.replaceFirst(intent.original, intent.suggestion)) }
@@ -273,10 +309,16 @@ class MainStore(
                     it.copy(isQuickTranslateDialogVisible = false, isQuickTranslateDialogPinned = false)
                 }
 
-            MainIntent.ToggleQuickTranslateDialogPin ->
-                // Use `it` from the update lambda — not _state.value — to avoid
-                // a data race between the value read and the update being applied.
-                _state.update { it.copy(isQuickTranslateDialogPinned = !it.isQuickTranslateDialogPinned) }
+            MainIntent.ToggleQuickTranslateDialogPin ->
+                // Use `it` from the update lambda — not _state.value — to avoid
+                // a data race between the value read and the update being applied.
+                _state.update { it.copy(isQuickTranslateDialogPinned = !it.isQuickTranslateDialogPinned) }
+
+            MainIntent.HotkeyCaptureStarted ->
+                _state.update { it.copy(isCapturingHotkeySelection = true) }
+
+            MainIntent.HotkeyCaptureFinished ->
+                _state.update { it.copy(isCapturingHotkeySelection = false) }
 
             MainIntent.UndoTranslation -> handleUndo()
             MainIntent.RedoTranslation -> handleRedo()
@@ -316,6 +358,10 @@ class MainStore(
 
             is MainIntent.ReplaceWithTranslation -> scope.launch {
                 handleReplaceWithTranslation(intent.selectedText)
+            }
+
+            is MainIntent.SwitchKeyboardLayout -> scope.launch {
+                handleSwitchKeyboardLayout(intent.selectedText)
             }
 
             is MainIntent.ListenToText -> scope.launch {
@@ -716,6 +762,56 @@ class MainStore(
         _state.update { it.copy(isReplacingSelection = false) }
         if (result.isNotBlank()) {
             _eventChannel.send(MainEvent.PasteTranslation(result))
+        }
+    }
+
+    /**
+     * Retypes [selectedText] on the other keyboard layout and pastes it back in place.
+     *
+     * The pair of layouts comes from the layouts installed in the OS, so every language and every
+     * layout variant works without a table being written for it by hand. The *direction* comes
+     * from the text rather than from whichever layout happens to be active: people often fix the
+     * layout themselves and only then press the hotkey, which makes the active layout the
+     * destination rather than the source.
+     *
+     * When the OS cannot be asked — anywhere but Windows, or the query failed — the built-in
+     * English/Russian table stands in, but only if the configured target languages say that is the
+     * pair this user writes in. Applied to anything else that table is destructive rather than
+     * merely useless: it would turn a French `bonjour` into `ищтощги`, over the top of a real
+     * selection.
+     *
+     * Nothing is pasted when the text comes back unchanged — the selection holds nothing either
+     * layout maps, digits say — because overwriting a selection with an identical copy would cost
+     * the user their undo history for no benefit.
+     *
+     * The system layout follows the text, but only when the text moved somewhere the system is
+     * not. Converting Latin keystrokes into Cyrillic while the Cyrillic layout is already
+     * active means the user fixed the layout by hand first; switching then would put them back
+     * where the mistake came from.
+     */
+    private suspend fun handleSwitchKeyboardLayout(selectedText: String) {
+        val conversion = KeyboardLayoutText.convert(selectedText, keyboardLayouts.readTransitions())
+            ?: run {
+                val config = settingsState.value
+                val supported = KeyboardLayoutText.supports(
+                    LanguageCode(config.preferredTargetLanguage),
+                    LanguageCode(config.secondaryTargetLanguage)
+                )
+                val text =
+                    if (supported) KeyboardLayoutText.convertWithBuiltInTable(selectedText)
+                    else selectedText
+                // The fallback never learned which layout is active, so it cannot tell whether
+                // the text moved. Switching is the better guess: the common case by far is
+                // text typed in the layout that is still active.
+                KeyboardLayoutText.Conversion(text, switchLayout = true)
+            }
+
+        if (conversion.text.isNotBlank() && conversion.text != selectedText) {
+            _eventChannel.send(MainEvent.PasteTranslation(conversion.text))
+        }
+
+        if (conversion.switchLayout) {
+            _eventChannel.send(MainEvent.SwitchSystemKeyboardLayout)
         }
     }
 

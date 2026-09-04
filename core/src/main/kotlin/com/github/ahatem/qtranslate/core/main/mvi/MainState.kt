@@ -51,6 +51,17 @@ data class MainState(
     val sourceLanguage: LanguageCode = LanguageCode.AUTO,
     val detectedSourceLanguage: LanguageCode? = null,
     val targetLanguage: LanguageCode = LanguageCode.ARABIC,
+    /**
+     * True when [targetLanguage] was worked out by a translation rule or the secondary-language
+     * fallback rather than chosen by the user.
+     *
+     * Without this the two are indistinguishable, and a rule's target quietly became the standing
+     * choice: after one "Russian → English" translation, the next auto-detected English text was
+     * translated into English, because the target left behind by the rule looked exactly like a
+     * target the user had picked. An automatic target applies to the translation that earned it
+     * and no further; the user's own choice persists until they change it.
+     */
+    val isTargetFromRule: Boolean = false,
     val availableServices: List<ServiceInfo> = emptyList(),
     val serviceLatencies: Map<String, ServiceLatency> = emptyMap(),
     val availableLanguages: List<LanguageCode> = emptyList(),
@@ -106,6 +117,17 @@ data class MainState(
     val isImageSearchPinned: Boolean = false,
     /** True while a silent background translation for inline replace is running. */
     val isReplacingSelection: Boolean = false,
+    /**
+     * True from the instant a hotkey that needs the current text selection is pressed until
+     * that selection has been captured and handed off to whatever it triggered.
+     *
+     * Capturing a selection means synthesizing Ctrl+C and waiting on the clipboard, which takes
+     * long enough to notice. This flag exists purely so the loading marker can appear the
+     * instant the key is pressed instead of only once that capture has finished — the marker
+     * would otherwise stay hidden for the one part of the operation with nothing else tracking
+     * it.
+     */
+    val isCapturingHotkeySelection: Boolean = false,
     /** True while the [com.github.ahatem.qtranslate.core.audio.AudioPlayer] is actively playing TTS audio. */
     val isTtsPlaying: Boolean = false,
     /** Progress for an active document translation, or null when idle. */

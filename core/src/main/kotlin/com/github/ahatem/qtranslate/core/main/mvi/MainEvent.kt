@@ -16,6 +16,19 @@ sealed interface MainEvent : UiEvent {
      */
     data class PasteTranslation(val translatedText: String) : MainEvent
 
+    /**
+     * Instructs the UI to move the system keyboard layout on to the next installed one.
+     *
+     * Sent alongside a [PasteTranslation] carrying the retyped text, because fixing the text
+     * without fixing the layout leaves the user about to carry on typing in the very layout
+     * that produced the mistake.
+     *
+     * Deliberately names no layout to switch *to*. Picking one would be more precise with
+     * three or more installed, but this is meant to be the same request Win+Space makes, and
+     * with two layouts "the next one" is always the other one.
+     */
+    data object SwitchSystemKeyboardLayout : MainEvent
+
     data class ShowUpdateDialog(
         val newVersion: String,
         val currentVersion: String,

@@ -27,11 +27,23 @@ sealed interface ServiceLatency {
     data class Answered(val millis: Long) : ServiceLatency
 
     /**
-     * The service did not answer within the deadline, refused the request, or answered with
-     * something other than the expected translation.
+     * The service was still silent when the deadline passed.
      *
-     * The three are not distinguished on purpose. They differ in cause and not in consequence:
-     * every one of them means this service will not translate the next thing the user types.
+     * Kept apart from [Failed] because the two say different things to someone choosing a
+     * service. A failure is a verdict — this service will not translate your text. A timeout is
+     * only the end of our patience: the service may be reachable and merely slow, or briefly
+     * overloaded, and it is worth trying again. Reporting both as "translation failed" told the
+     * user a working-but-slow service was broken.
+     */
+    data object TimedOut : ServiceLatency
+
+    /**
+     * The service refused the request, errored, or answered with something other than the
+     * expected translation.
+     *
+     * Those three stay together on purpose: they differ in cause but not in consequence, and each
+     * one means this service will not translate the next thing the user types. A timeout is the
+     * one outcome that does not mean that, which is why it is [TimedOut] instead.
      */
     data object Failed : ServiceLatency
 }

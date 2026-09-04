@@ -21,6 +21,7 @@ class GeneralPanel(
     private lateinit var updatesCheckbox: JCheckBox
     private lateinit var historyCheckbox: JCheckBox
     private lateinit var clearCheckbox:   JCheckBox
+    private lateinit var keepInClipboardCheckbox: JCheckBox
     private lateinit var selectionIconCheckbox: JCheckBox
 
     init { buildUI() }
@@ -68,6 +69,15 @@ class GeneralPanel(
         )
         addHint(localizationManager.getString("settings_general.clear_history_hint"))
 
+        keepInClipboardCheckbox = addCheckbox(
+            text = localizationManager.getString("settings_general.keep_translation_in_clipboard"),
+            selected = false,
+            onChange = { enabled ->
+                applyDraft(store) { it.copy(isTranslationKeptInClipboard = enabled) }
+            }
+        )
+        addHint(localizationManager.getString("settings_general.keep_translation_in_clipboard_hint"))
+
         finishLayout()
     }
 
@@ -81,6 +91,7 @@ class GeneralPanel(
             historyCheckbox.isSelected = c.isHistoryEnabled
             clearCheckbox.isSelected   = c.clearHistoryOnExit
             clearCheckbox.isEnabled    = c.isHistoryEnabled
+            keepInClipboardCheckbox.isSelected = c.isTranslationKeptInClipboard
         }
     }
 }

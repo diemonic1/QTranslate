@@ -766,14 +766,15 @@ class MainContentView(
     /**
      * How a measured service reads in the picker, in the user's language.
      *
-     * A failure deliberately says only that the translation failed. The use case knows whether the
-     * service timed out, errored, or answered with the wrong word, but that distinction is for the
-     * log: someone choosing between services needs to know which ones work, and three ways of
-     * saying "not this one" only makes that harder to see.
+     * A service that errored, refused, or answered with the wrong word reads the same either way:
+     * those differ in cause but not in consequence, and three phrasings of "not this one" only
+     * make the list harder to scan. A timeout is separated out because it is not the same verdict
+     * — the service may simply be slow, and calling that a translation error was misleading.
      */
     private fun phrase(latency: ServiceLatency): String = when (latency) {
         is ServiceLatency.Probing  -> localizer.getString("main_window.service_latency_probing")
         is ServiceLatency.Answered -> localizer.getString("main_window.service_latency_ok", latency.millis)
+        is ServiceLatency.TimedOut -> localizer.getString("main_window.service_latency_timeout")
         is ServiceLatency.Failed   -> localizer.getString("main_window.service_latency_failed")
     }
 

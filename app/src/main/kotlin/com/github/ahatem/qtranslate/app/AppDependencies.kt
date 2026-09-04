@@ -34,6 +34,7 @@ import com.github.ahatem.qtranslate.core.shared.notification.NotificationBus
 import com.github.ahatem.qtranslate.core.updater.Updater
 import com.github.ahatem.qtranslate.ui.swing.shared.icon.IconManager
 import com.github.ahatem.qtranslate.ui.swing.shared.theme.ThemeManager
+import com.github.ahatem.qtranslate.ui.swing.shared.util.WindowsKeyboardLayouts
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -286,7 +287,8 @@ suspend fun buildDependencies(
         measureServiceLatencyUseCase = MeasureServiceLatencyUseCase(
             activeServices = pluginManager.activeServices,
             loggerFactory  = loggerFactory
-        )
+        ),
+        keyboardLayouts = WindowsKeyboardLayouts(loggerFactory.getLogger("KeyboardLayouts"))
     )
 
     return AppDependencies(

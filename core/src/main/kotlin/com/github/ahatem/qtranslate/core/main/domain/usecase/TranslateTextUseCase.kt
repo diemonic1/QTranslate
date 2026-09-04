@@ -99,22 +99,20 @@ class TranslateTextUseCase(
                 updateState { copy(isLoading = true, translatedText = "", extraOutputText = "", isExtraOutputLoading = false) }
 
                 val currentState = getState()
-                val rules        = settingsState.value.translationRules
                 val isAutoDetect = currentState.sourceLanguage == LanguageCode.AUTO
 
-                // When source is explicitly set, we already know the language — apply
-                // the rule immediately without needing a first-pass translation.
-                val preResolvedTarget = if (!isAutoDetect) {
-                    val detectedOrSelected = currentState.detectedSourceLanguage
-                        ?: currentState.sourceLanguage
-                    resolveTargetFromRules(detectedOrSelected, rules)
-                } else null
+                // With an explicit source the language is already known, so the whole decision
+                // can be made now. Under auto-detect only the part that does not depend on the
+                // source can — which is still worth doing, because that part is what clears a
+                // target left behind by the previous translation's rule.
+                val knownSource = if (isAutoDetect) null else currentState.sourceLanguage
+                val initialChoice = chooseTarget(knownSource, currentState)
+                val initialTarget = initialChoice.language
 
-                val initialTarget = preResolvedTarget ?: currentState.targetLanguage
-
-                // Update UI immediately if rule changed the target before translating
-                if (preResolvedTarget != null && preResolvedTarget != currentState.targetLanguage) {
-                    updateState { copy(targetLanguage = preResolvedTarget) }
+                if (initialTarget != currentState.targetLanguage) {
+                    updateState {
+                        copy(targetLanguage = initialTarget, isTargetFromRule = initialChoice.isAutomatic)
+                    }
                 }
 
                 val request = TranslationRequest(
@@ -146,29 +144,27 @@ class TranslateTextUseCase(
                         val detectedLanguage = response.detectedLanguage
                             .takeIf { isAutoDetect }
 
-                        // Re-translate if Auto Detect revealed a rule match
-                        // Only triggers when:
-                        // 1. Source was Auto Detect
-                        // 2. A language was detected from the response
-                        // 3. A rule matches the detected language
-                        // 4. The rule target differs from what we just translated to
+                        // Detection can change the answer: it may match a rule, or reveal that
+                        // we just translated a language into itself. Both are only knowable
+                        // now, and both are worth a second round trip to correct.
                         if (isAutoDetect && detectedLanguage != null) {
-                            val ruleTarget = resolveTargetFromRules(detectedLanguage, rules)
-                            if (ruleTarget != null && ruleTarget != initialTarget) {
+                            val settled = chooseTarget(detectedLanguage, currentState)
+                            if (settled.language != initialTarget) {
                                 logger.debug(
-                                    "Rule matched detected '${detectedLanguage.tag}' → " +
-                                            "re-translating to '${ruleTarget.tag}'"
+                                    "Detected '${detectedLanguage.tag}' → re-translating to " +
+                                            "'${settled.language.tag}' instead of '${initialTarget.tag}'"
                                 )
                                 handleReTranslation(
-                                    textToTranslate  = textToTranslate,
-                                    sourceLanguage   = currentState.sourceLanguage,
-                                    ruleTarget       = ruleTarget,
-                                    detectedLanguage = detectedLanguage,
-                                    currentState     = currentState,
-                                    translator       = translator,
-                                    translatorId     = translatorId,
-                                    updateState      = updateState,
-                                    onStatusUpdate   = onStatusUpdate
+                                    textToTranslate   = textToTranslate,
+                                    sourceLanguage    = currentState.sourceLanguage,
+                                    ruleTarget        = settled.language,
+                                    isTargetAutomatic = settled.isAutomatic,
+                                    detectedLanguage  = detectedLanguage,
+                                    currentState      = currentState,
+                                    translator        = translator,
+                                    translatorId      = translatorId,
+                                    updateState       = updateState,
+                                    onStatusUpdate    = onStatusUpdate
                                 )
                                 return@launch
                             }
@@ -227,6 +223,7 @@ class TranslateTextUseCase(
         textToTranslate: String,
         sourceLanguage: LanguageCode,
         ruleTarget: LanguageCode,
+        isTargetAutomatic: Boolean,
         detectedLanguage: LanguageCode,
         currentState: MainState,
         translator: Translator,
@@ -271,7 +268,8 @@ class TranslateTextUseCase(
                     translator        = translator,
                     updateState       = updateState,
                     onStatusUpdate    = onStatusUpdate,
-                    ruleTarget        = ruleTarget
+                    ruleTarget        = ruleTarget,
+                    isTargetAutomatic = isTargetAutomatic
                 )
             },
             failure = { error ->
@@ -286,6 +284,55 @@ class TranslateTextUseCase(
     // -------------------------------------------------------------------------
     // Rules
     // -------------------------------------------------------------------------
+
+    /** A target language, and whether the application worked it out rather than the user. */
+    private data class TargetChoice(val language: LanguageCode, val isAutomatic: Boolean)
+
+    /**
+     * The language this translation should produce, given what is known about its source.
+     *
+     * Three things decide it, in order:
+     *
+     * 1. **The standing choice** — normally whatever target is on screen, except when that
+     *    target was itself automatic, in which case it is discarded in favour of the saved
+     *    preference. An automatic target belongs to the translation that produced it. Letting
+     *    one stand is what made a "Russian → English" rule quietly turn the *next*
+     *    auto-detected English text into English: the target the rule left behind was
+     *    indistinguishable from a target the user had chosen.
+     * 2. **A matching rule**, which overrides the standing choice for this translation only.
+     * 3. **The secondary language**, when the result of the first two is the language being
+     *    translated from. Translating a language into itself returns the input unchanged,
+     *    which is never what was being asked for.
+     *
+     * [source] is null while auto-detect has yet to report. The steps that need it are then
+     * skipped, and the caller asks again once the language is known.
+     */
+    private fun chooseTarget(source: LanguageCode?, currentState: MainState): TargetChoice {
+        val config = settingsState.value
+        val standing = if (currentState.isTargetFromRule) {
+            LanguageCode(config.preferredTargetLanguage)
+        } else {
+            currentState.targetLanguage
+        }
+
+        val ruleTarget = source?.let { resolveTargetFromRules(it, config.translationRules) }
+        val chosen = ruleTarget ?: standing
+
+        if (source != null && chosen == source) {
+            val secondary = LanguageCode(config.secondaryTargetLanguage)
+            // A secondary that is also the source leaves nothing to fall back to. Better to let
+            // the pointless translation happen visibly than to pick a language nobody named.
+            if (secondary != source) {
+                logger.debug(
+                    "Target '${chosen.tag}' is the source language — using the secondary " +
+                            "language '${secondary.tag}' instead"
+                )
+                return TargetChoice(secondary, isAutomatic = true)
+            }
+        }
+
+        return TargetChoice(chosen, isAutomatic = ruleTarget != null)
+    }
 
     private fun resolveTargetFromRules(
         detectedSource: LanguageCode,
@@ -446,7 +493,8 @@ class TranslateTextUseCase(
         translator: Translator,
         updateState: (MainState.() -> MainState) -> Unit,
         onStatusUpdate: suspend (code: StatusCode, type: NotificationType, isTemporary: Boolean) -> Unit,
-        ruleTarget: LanguageCode? = null
+        ruleTarget: LanguageCode? = null,
+        isTargetAutomatic: Boolean = false
     ) {
         val extraOutputType = settingsState.value.extraOutputType
         val expectsExtraOutput = extraOutputType != ExtraOutputType.None
@@ -457,6 +505,9 @@ class TranslateTextUseCase(
                 translatedText         = translatedText,
                 detectedSourceLanguage = detectedLanguage,
                 targetLanguage         = ruleTarget ?: targetLanguage,
+                // Recorded so the next translation can tell this target apart from one the
+                // user chose, and decline to inherit it.
+                isTargetFromRule       = if (ruleTarget != null) isTargetAutomatic else isTargetFromRule,
                 history                = history,
                 historyIndex           = historyIndex,
                 extraOutputText        = "",

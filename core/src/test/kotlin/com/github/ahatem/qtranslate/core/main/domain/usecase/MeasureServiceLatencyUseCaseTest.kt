@@ -56,18 +56,26 @@ class MeasureServiceLatencyUseCaseTest {
     }
 
     @Test
-    fun `a service that errors fails rather than reporting the time it took to refuse`() = runTest {
+    fun `a service that errors is a failure rather than a timeout`() = runTest {
         val results = probe("broken" to FakeTranslator { error("unreachable") })
 
         assertEquals(ServiceLatency.Failed, results.getValue("broken"))
     }
 
     @Test
-    fun `a service slower than the deadline fails`() = runTest {
+    fun `a service slower than the deadline is a timeout, not a failure`() = runTest {
         // runTest's virtual clock skips the wait, so the seven seconds cost nothing to assert.
         val results = probe("slow" to FakeTranslator(delayMs = 7_001) { "transcription" })
 
-        assertEquals(ServiceLatency.Failed, results.getValue("slow"))
+        // Not Failed: a slow service is not a broken one, and the picker says so differently.
+        assertEquals(ServiceLatency.TimedOut, results.getValue("slow"))
+    }
+
+    @Test
+    fun `a service that answers just inside the deadline is still timed`() = runTest {
+        val results = probe("nearly" to FakeTranslator(delayMs = 6_999) { "transcription" })
+
+        assertIs<ServiceLatency.Answered>(results.getValue("nearly"))
     }
 
     @Test

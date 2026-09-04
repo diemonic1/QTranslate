@@ -150,6 +150,7 @@ object Icons {
     val COPY get() = IconSet.path("copy")
     val SEARCH get() = IconSet.path("search")
     val SWAP get() = IconSet.path("swap")
+    val REPLACE get() = IconSet.path("replace")
     val CHECK get() = IconSet.path("check")
     val CLOSE get() = IconSet.path("close")
     val PIN get() = IconSet.path("pin")

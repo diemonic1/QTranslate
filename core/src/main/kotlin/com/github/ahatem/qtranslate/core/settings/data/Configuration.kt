@@ -109,7 +109,8 @@ enum class HotkeyAction {
     SWAP_LANGUAGES,            // swap source and target languages (default: Ctrl+Shift+S, LOCAL)
     OPEN_SETTINGS,             // open the settings dialog (default: Ctrl+Comma, LOCAL)
     SHOW_HISTORY,              // open the translation history dialog (default: Ctrl+Shift+H, LOCAL)
-    TRANSLATE_DOCUMENT         // open the document translation dialog (default: Ctrl+Shift+D, LOCAL)
+    TRANSLATE_DOCUMENT,        // open the document translation dialog (default: Ctrl+Shift+D, LOCAL)
+    SWITCH_KEYBOARD_LAYOUT     // retype the selection on the other layout (default: Ctrl+Shift+L, GLOBAL)
 }
 
 /**
@@ -179,6 +180,17 @@ data class HotkeyBinding(
             HotkeyBinding(HotkeyAction.LISTEN_TO_TEXT,           keyCode = java.awt.event.KeyEvent.VK_E,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK,  scope = HotkeyScope.GLOBAL),
             HotkeyBinding(HotkeyAction.OPEN_OCR,                 keyCode = java.awt.event.KeyEvent.VK_I,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK,  scope = HotkeyScope.GLOBAL),
             HotkeyBinding(HotkeyAction.REPLACE_WITH_TRANSLATION, keyCode = java.awt.event.KeyEvent.VK_T,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK or java.awt.event.InputEvent.SHIFT_DOWN_MASK, scope = HotkeyScope.GLOBAL),
+            // Global: the whole point is to fix text typed in another application, so it has
+            // to answer while that application has focus.
+            //
+            // Not Alt-anything. RegisterHotKey (which this app uses for every global binding)
+            // has a documented quirk with Alt combinations: Windows still delivers a bare
+            // WM_SYSKEYUP for Alt to whatever window has focus when the key is released, even
+            // though the hotkey itself was consumed, and a standard window reads that as
+            // "Alt was pressed alone" — the signal to activate its menu bar. Confirmed in
+            // testing: Ctrl+Alt+Space stole focus to Notepad's menu and swallowed the paste
+            // that was meant to land in the text. Ctrl+Shift avoids the whole class of bug.
+            HotkeyBinding(HotkeyAction.SWITCH_KEYBOARD_LAYOUT,   keyCode = java.awt.event.KeyEvent.VK_L,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK or java.awt.event.InputEvent.SHIFT_DOWN_MASK, scope = HotkeyScope.GLOBAL),
             HotkeyBinding(HotkeyAction.CYCLE_TARGET_LANGUAGE,    keyCode = java.awt.event.KeyEvent.VK_L,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK,  scope = HotkeyScope.LOCAL),
             HotkeyBinding(HotkeyAction.SHOW_DICTIONARY,          keyCode = java.awt.event.KeyEvent.VK_D,               modifiers = java.awt.event.InputEvent.CTRL_DOWN_MASK,  scope = HotkeyScope.GLOBAL),
             // Shift+the quick-translate key: this is the same gesture on the same selection,
@@ -317,6 +329,20 @@ data class Configuration(
     val preferredTargetLanguage: String = "en",
 
     /**
+     * The language to translate into when [preferredTargetLanguage] is the language being
+     * translated *from*.
+     *
+     * Auto-detect makes the target a moving question. Someone whose target is Russian selects a
+     * Russian sentence and asks for a translation: obeying the setting literally translates
+     * Russian into Russian and hands back what they already had. That is never what was wanted,
+     * and it is the one case the target setting alone cannot express — hence a second one.
+     *
+     * Only consulted when the resolved target is the language being translated from, so it costs
+     * nothing for anyone who never hits that case.
+     */
+    val secondaryTargetLanguage: String = "en",
+
+    /**
      * The language tag last selected as the source language, or "auto" for auto-detect.
      * Restored on startup.
      */
@@ -336,6 +362,19 @@ data class Configuration(
     // ---- History ----
     val isHistoryEnabled: Boolean = true,
     val clearHistoryOnExit: Boolean = false,
+
+    /**
+     * Whether a translation pasted over a selection is left on the clipboard afterwards.
+     *
+     * Replacing a selection has to go through the clipboard — there is no other way to hand
+     * text to another application — but borrowing it and keeping it are different things. Left
+     * on, every replace and every layout fix silently overwrote whatever the person had copied,
+     * which is somebody else's data taken as a side effect of an unrelated feature.
+     *
+     * Off by default, so the clipboard is put back the way it was found. On for anyone who
+     * would rather keep the translation to paste again elsewhere.
+     */
+    val isTranslationKeptInClipboard: Boolean = false,
 
     // ---- UI — Main Window ----
     val showDictionaryPanel: Boolean = false,
@@ -454,6 +493,7 @@ data class Configuration(
                 closeButtonBehavior          = CloseButtonBehavior.ASK,
                 isHistoryEnabled             = true,
                 clearHistoryOnExit           = false,
+                isTranslationKeptInClipboard = false,
                 uiScale                      = 100,
                 themeId                      = "os_default",
                 uiFontConfig                 = FontConfig(name = "Rubik", size = 13),

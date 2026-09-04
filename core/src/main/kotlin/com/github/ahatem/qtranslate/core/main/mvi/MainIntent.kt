@@ -152,6 +152,28 @@ sealed interface MainIntent : UiIntent {
     /** User triggered inline translation — selected text will be replaced with its translation. */
     data class ReplaceWithTranslation(val selectedText: String) : MainIntent
 
+    /**
+     * User asked for [selectedText] to be retyped on the other keyboard layout.
+     *
+     * Nothing is translated here: the text is already in the language the user wanted, it was
+     * merely entered with the wrong layout active. The replacement is a character-for-character
+     * rewrite, not a round trip through a service.
+     */
+    data class SwitchKeyboardLayout(val selectedText: String) : MainIntent
+
+    /**
+     * A hotkey that needs the current selection was just pressed, before its text has been
+     * captured.
+     *
+     * Dispatched synchronously from the hotkey listener itself, ahead of any of the clipboard
+     * work that follows — see [MainState.isCapturingHotkeySelection] for why that timing is
+     * the point of this intent.
+     */
+    data object HotkeyCaptureStarted : MainIntent
+
+    /** The capture begun by [HotkeyCaptureStarted] has handed off to whatever it triggered. */
+    data object HotkeyCaptureFinished : MainIntent
+
     /** User cycled to the next available target language. */
     data object CycleTargetLanguage : MainIntent
 

@@ -13,6 +13,7 @@ import com.github.ahatem.qtranslate.ui.swing.main.selector.TranslatorSelectorSta
 import com.github.ahatem.qtranslate.ui.swing.shared.icon.IconManager
 import com.github.ahatem.qtranslate.ui.swing.shared.util.*
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.AdvancedTextPane
+import com.github.ahatem.qtranslate.ui.swing.shared.widgets.InvisibleCaret
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.ComponentMover
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.ComponentResizer
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.FloatingPopupBehavior
@@ -49,7 +50,9 @@ class QuickTranslateDialog(
     private val onPinToggled: () -> Unit,
     private val onSourceLanguageSelected: (LanguageCode) -> Unit = {},
     private val onTargetLanguageSelected: (LanguageCode) -> Unit = {},
-    private val onSwapLanguages: () -> Unit = {}
+    private val onSwapLanguages: () -> Unit = {},
+    /** Writes the translation over the selection it came from, then closes the popup. */
+    private val onReplaceSelection: () -> Unit = {}
 ) : JDialog(null as Frame?, ModalityType.MODELESS), Renderable<QuickTranslateDialogState> {
 
     private companion object {
@@ -122,7 +125,10 @@ class QuickTranslateDialog(
     private var isRenderingLanguages = false
     private val translatorComboBox = TranslatorPopupButton(iconManager, onTranslatorSelected)
 
+    // Pin is leftmost: it is the control someone reaches for first, to keep the popup open
+    // before doing anything else with it.
     private val pinButton = createButtonWithIcon(iconManager, Icons.PIN, 14)
+    private val replaceButton = createButtonWithIcon(iconManager, Icons.REPLACE, 14)
     private val listenButton = createButtonWithIcon(iconManager, Icons.SPEAK, 14)
     private val copyButton = createButtonWithIcon(iconManager, Icons.COPY, 14)
     private val closeButton = createButtonWithIcon(iconManager, Icons.CLOSE, 16)
@@ -135,6 +141,10 @@ class QuickTranslateDialog(
     ).apply {
         isEditable = false
         border = EmptyBorder(6, 6, 6, 6)
+        // Read-only, so a caret would mark a place nothing can be typed at. Replacing it rather
+        // than hiding it also stops the blink timer, whose repaints were smearing the text while a
+        // selection was being dragged. Selection itself still works — the caret is what carries it.
+        caret = InvisibleCaret()
     }
 
     private val loadingBar = InlineLoadingBar()
@@ -383,6 +393,10 @@ class QuickTranslateDialog(
             KeyEvent.VK_P
         )
         copyButton.toolTipText = withShortcut(state.strings.copyTooltip, KeyEvent.VK_C)
+        replaceButton.toolTipText = state.strings.replaceTooltip
+        // Nothing to write back until there is a translation, and a button that looks
+        // pressable but silently does nothing is worse than one that is plainly not ready.
+        replaceButton.isEnabled = state.translatedText.isNotBlank() && !state.isLoading
         swapButton.toolTipText = withShortcut(state.strings.swapTooltip, KeyEvent.VK_S)
         closeButton.toolTipText = state.strings.closeTooltip
 
@@ -622,9 +636,10 @@ class QuickTranslateDialog(
             onCopy()
             showCopyFeedback()
         }
+        replaceButton.addActionListener { onReplaceSelection() }
         closeButton.addActionListener { onDismiss() }
 
-        listOf(pinButton, listenButton, copyButton).forEach { b ->
+        listOf(pinButton, replaceButton, listenButton, copyButton).forEach { b ->
             b.putClientProperty("JButton.buttonType", "toolBarButton")
         }
 
@@ -681,6 +696,7 @@ class QuickTranslateDialog(
             layout = BoxLayout(this, BoxLayout.X_AXIS)
 
             add(pinButton)
+            add(replaceButton)
             add(listenButton)
             add(copyButton)
 

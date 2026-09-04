@@ -4,6 +4,9 @@ import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.core.settings.data.HotkeyAction
 import com.github.ahatem.qtranslate.core.settings.data.HotkeyBinding
 import com.github.ahatem.qtranslate.core.settings.data.HotkeyScope
+import com.github.ahatem.qtranslate.ui.swing.shared.util.ClipboardPrivacy
+import com.github.ahatem.qtranslate.ui.swing.shared.util.PhysicalKeyState
+import com.github.ahatem.qtranslate.ui.swing.shared.util.SyntheticInput
 import com.github.kwhat.jnativehook.GlobalScreen
 import com.github.kwhat.jnativehook.NativeHookException
 import com.github.kwhat.jnativehook.keyboard.NativeKeyEvent
@@ -15,11 +18,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.awt.Point
-import java.awt.Robot
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
-import java.awt.event.KeyEvent
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 
@@ -52,7 +53,16 @@ class MainGlobalKeyListener(
     private val onListenToText: (String) -> Unit,
     private val onOpenSnippingTool: () -> Unit,
     private val onReplaceWithTranslation: (String) -> Unit,
+    /** Retypes the captured selection on the other keyboard layout and pastes it back. */
+    private val onSwitchKeyboardLayout: (String) -> Unit,
     private val onCycleTargetLanguage: () -> Unit,
+    /**
+     * Fired synchronously, before any coroutine is even scheduled, the instant a hotkey
+     * that needs the current selection is pressed — see the matching [onCaptureFinished] and
+     * [MainState.isCapturingHotkeySelection].
+     */
+    private val onCaptureStarted: () -> Unit = {},
+    private val onCaptureFinished: () -> Unit = {},
     private val onShowDictionary: (String) -> Unit = {},
     private val onShowImages: (String) -> Unit = {},
     private val onTranslate: () -> Unit = {},
@@ -64,7 +74,6 @@ class MainGlobalKeyListener(
     private var nativeHookRegistered = false
     private val sequenceListener = CustomSequenceListener()
     private val selectionMouseListener = SelectionMouseListener()
-    private val clipboardLock = AtomicBoolean(false)
     private val hotkeysEnabled = AtomicBoolean(true)
     // AtomicBoolean.compareAndSet prevents double-initialization if initialize()
     // is called concurrently (e.g. from two rapid lifecycle events).
@@ -177,16 +186,29 @@ class MainGlobalKeyListener(
      */
     fun dispatchAction(action: HotkeyAction) {
         when (action) {
-            HotkeyAction.SHOW_QUICK_TRANSLATE ->
-                scope.launch { handleSelectedText(onShowQuickTranslate) }
+            // These three show the loading marker for the whole operation, capture
+            // included, so onCaptureStarted is called here — synchronously, before
+            // scope.launch even queues the coroutine — rather than inside
+            // handleSelectedText, where it would run after a dispatcher hop the marker
+            // should not have to wait for.
+            HotkeyAction.SHOW_QUICK_TRANSLATE -> {
+                onCaptureStarted()
+                scope.launch { runCatching { handleSelectedText(onShowQuickTranslate) }.also { onCaptureFinished() } }
+            }
             HotkeyAction.LISTEN_TO_TEXT ->
                 scope.launch { handleSelectedText(onListenToText) }
             HotkeyAction.OPEN_OCR ->
                 onOpenSnippingTool()
             HotkeyAction.SHOW_MAIN_WINDOW ->
                 scope.launch { handleSelectedText(onShowApp) }
-            HotkeyAction.REPLACE_WITH_TRANSLATION ->
-                scope.launch { handleSelectedText(onReplaceWithTranslation) }
+            HotkeyAction.REPLACE_WITH_TRANSLATION -> {
+                onCaptureStarted()
+                scope.launch { runCatching { handleSelectedText(onReplaceWithTranslation) }.also { onCaptureFinished() } }
+            }
+            HotkeyAction.SWITCH_KEYBOARD_LAYOUT -> {
+                onCaptureStarted()
+                scope.launch { runCatching { handleSelectedText(onSwitchKeyboardLayout) }.also { onCaptureFinished() } }
+            }
             HotkeyAction.CYCLE_TARGET_LANGUAGE ->
                 onCycleTargetLanguage()
             HotkeyAction.SHOW_DICTIONARY ->
@@ -346,23 +368,49 @@ class MainGlobalKeyListener(
         }
     }
 
+    /**
+     * Reads whatever is selected in the focused application and hands it to [callback].
+     *
+     * There is no interface for asking another application what it has selected, so the only
+     * way is to send it the copy shortcut and watch the clipboard. A sentinel goes in first, so
+     * that "the target copied nothing" can be told apart from "the target copied the same text
+     * that was already there".
+     *
+     * ### Why the shortcut is sent once and the clipboard read many times
+     * It used to send the shortcut again on every attempt. When an attempt misfired and typed a
+     * bare letter — see SyntheticInput for how that happens — it had already replaced the
+     * selection, so the retries had nothing left to copy and each one typed another letter over
+     * the user's text. Sending once and waiting longer costs nothing and cannot compound.
+     * Writing the sentinel once also keeps a clipboard-history tool from filling up with them.
+     */
     private suspend fun handleSelectedText(callback: (String) -> Unit) {
-        if (!clipboardLock.compareAndSet(false, true)) return
+        // Dropped rather than queued: a second capture would run after the first has already
+        // replaced the selection, and would read back the replacement.
+        if (!SyntheticInput.exchange.tryLock(owner = this)) {
+            logger.debug("Selection capture skipped: another clipboard exchange is in flight")
+            return
+        }
         try {
             val clipboard = Toolkit.getDefaultToolkit().systemClipboard
             val original  = runCatching { clipboard.getContents(null) }.getOrNull()
 
             try {
-                // Global hotkey callbacks can arrive while Ctrl/Cmd is still physically held.
-                // Give the originating key sequence time to finish before synthesizing Copy.
-                delay(80)
+                // Global hotkey callbacks arrive while the keys that fired them may still be
+                // held. Waiting is the cheap way to keep the synthetic shortcut clean; the
+                // release built into the batch itself is the guarantee when the wait times out.
+                PhysicalKeyState.awaitModifiersReleased(timeoutMs = MODIFIER_WAIT_MS)
+
+                val sentinel = "qtranslate-copy-${UUID.randomUUID()}"
+                // Marked unrecorded: a sentinel is a probe, not something the user copied,
+                // and it has no business turning up in their clipboard history.
+                runCatching {
+                    clipboard.setContents(ClipboardPrivacy.unrecordedText(sentinel), null)
+                }
+
+                SyntheticInput.sendCopyShortcut(logger)
 
                 var text: String? = null
-                for (backoffMs in longArrayOf(50, 90, 140)) {
-                    val sentinel = "qtranslate-copy-${UUID.randomUUID()}"
-                    runCatching { clipboard.setContents(StringSelection(sentinel), null) }
-
-                    simulateCopy()
+                for (backoffMs in CLIPBOARD_POLL_BACKOFF_MS) {
                     delay(backoffMs)
 
                     val candidate = runCatching {
@@ -384,28 +432,28 @@ class MainGlobalKeyListener(
                 original?.let { runCatching { clipboard.setContents(it, null) } }
             }
         } finally {
-            clipboardLock.set(false)
+            SyntheticInput.exchange.unlock(owner = this)
         }
     }
 
-    private fun simulateCopy() {
-        runCatching {
-            val robot = Robot()
-            robot.autoDelay = 20
-            val copyModifier = if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
-                KeyEvent.VK_META
-            } else {
-                KeyEvent.VK_CONTROL
-            }
-            robot.keyPress(copyModifier)
-            robot.keyPress(KeyEvent.VK_C)
-            robot.keyRelease(KeyEvent.VK_C)
-            robot.keyRelease(copyModifier)
-            robot.waitForIdle()
-        }.onFailure { logger.warn("Copy simulation failed: ${it.message}") }
-    }
-
     private companion object {
+        /**
+         * How long to wait for the hotkey's own modifiers to be let go before copying.
+         *
+         * Generous on purpose. The batch releases anything still held anyway, but that release
+         * puts the OS briefly out of step with the physical keyboard, so it is better kept as
+         * the exception rather than the rule.
+         */
+        const val MODIFIER_WAIT_MS = 600L
+
+        /**
+         * When to look at the clipboard after asking the target to copy, in milliseconds.
+         *
+         * Front-loaded because a local text field answers almost at once, while a browser can
+         * take a few hundred milliseconds to put the selection on the clipboard.
+         */
+        val CLIPBOARD_POLL_BACKOFF_MS = longArrayOf(15, 30, 60, 120, 200)
+
         /** Pointer travel, in pixels, before a press-and-drag counts as a selection. */
         const val MIN_SELECTION_DRAG_DISTANCE = 5.0
 

@@ -37,6 +37,7 @@ class KeyboardPanel(
         HotkeyAction.LISTEN_TO_TEXT,
         HotkeyAction.OPEN_OCR,
         HotkeyAction.REPLACE_WITH_TRANSLATION,
+        HotkeyAction.SWITCH_KEYBOARD_LAYOUT,
         HotkeyAction.CYCLE_TARGET_LANGUAGE,
         HotkeyAction.SHOW_DICTIONARY,
         HotkeyAction.SHOW_IMAGES,
@@ -261,6 +262,7 @@ class KeyboardPanel(
         HotkeyAction.LISTEN_TO_TEXT           -> localizationManager.getString("settings_hotkeys.action_listen")
         HotkeyAction.OPEN_OCR                 -> localizationManager.getString("settings_hotkeys.action_ocr")
         HotkeyAction.REPLACE_WITH_TRANSLATION -> localizationManager.getString("settings_hotkeys.action_replace")
+        HotkeyAction.SWITCH_KEYBOARD_LAYOUT -> localizationManager.getString("settings_hotkeys.action_switch_layout")
         HotkeyAction.CYCLE_TARGET_LANGUAGE    -> localizationManager.getString("settings_hotkeys.action_cycle_language")
         HotkeyAction.SHOW_DICTIONARY          -> localizationManager.getString("settings_hotkeys.action_show_dictionary")
         HotkeyAction.SHOW_IMAGES              -> localizationManager.getString("settings_hotkeys.action_show_images")
@@ -538,6 +540,7 @@ object HotkeyRecorderDialog {
             HotkeyAction.LISTEN_TO_TEXT           -> localizer.getString("settings_hotkeys.action_listen")
             HotkeyAction.OPEN_OCR                 -> localizer.getString("settings_hotkeys.action_ocr")
             HotkeyAction.REPLACE_WITH_TRANSLATION -> localizer.getString("settings_hotkeys.action_replace")
+            HotkeyAction.SWITCH_KEYBOARD_LAYOUT -> localizer.getString("settings_hotkeys.action_switch_layout")
             HotkeyAction.CYCLE_TARGET_LANGUAGE    -> localizer.getString("settings_hotkeys.action_cycle_language")
             HotkeyAction.SHOW_DICTIONARY          -> localizer.getString("settings_hotkeys.action_show_dictionary")
             HotkeyAction.SHOW_IMAGES              -> localizer.getString("settings_hotkeys.action_show_images")

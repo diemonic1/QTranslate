@@ -23,6 +23,9 @@ dependencies {
     implementation(libs.miglayout)
 
     implementation(libs.jnativehook)
+    // Arrives transitively with jnativehook, but SystemKeyboardLayout calls it directly,
+    // and a dependency you compile against belongs in the build file that compiles it.
+    implementation(libs.jnaPlatform)
     implementation(libs.jkeymaster)
 
     implementation(libs.commonmark)

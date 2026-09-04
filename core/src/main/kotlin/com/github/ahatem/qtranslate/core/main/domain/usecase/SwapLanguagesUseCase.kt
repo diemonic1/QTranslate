@@ -44,6 +44,9 @@ class SwapLanguagesUseCase {
             currentState.copy(
                 sourceLanguage         = currentState.targetLanguage,
                 targetLanguage         = effectiveSource,
+                // A swap is the user naming the direction, so the target it produces stands
+                // until they change it again.
+                isTargetFromRule       = false,
                 inputText              = currentState.translatedText,
                 translatedText         = "",
                 extraOutputText        = "",

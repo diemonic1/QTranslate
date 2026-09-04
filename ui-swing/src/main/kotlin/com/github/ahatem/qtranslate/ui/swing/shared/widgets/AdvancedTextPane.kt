@@ -155,6 +155,35 @@ class AdvancedCaret(
     }
 }
 
+/**
+ * A caret that still tracks the selection but is never drawn.
+ *
+ * Swing offers no way to do without a caret: it is the caret that holds the dot and the mark, so
+ * dragging out a selection with the mouse goes through it. What a read-only pane does not need is
+ * to *see* one. There is nothing to insert at, so a blinking bar only claims the text is editable,
+ * and every blink asks for a repaint of the line beneath it — which is where the flicker and the
+ * smearing during a drag came from, the blink and the drag redrawing the same strip on schedules
+ * that know nothing about each other.
+ *
+ * [damage] is deliberately empty. Its entire job is to mark the caret's old and new positions dirty
+ * so the bar can be erased and redrawn somewhere else; with nothing ever drawn there is nothing to
+ * erase, and those repaint requests were the artefacts.
+ */
+class InvisibleCaret : DefaultCaret() {
+
+    override fun install(c: JTextComponent) {
+        super.install(c)
+        // No timer at all, rather than a timer whose ticks paint nothing.
+        blinkRate = 0
+    }
+
+    override fun paint(g: Graphics?) = Unit
+
+    override fun isVisible(): Boolean = false
+
+    override fun damage(r: Rectangle?) = Unit
+}
+
 class FontFallbackDocumentListener(
     private val textPane: AdvancedTextPane,
     private val batchDelayMs: Int = 50
@@ -473,7 +502,20 @@ class AdvancedTextPane(
         val g2 = g.create() as Graphics2D
         try {
             g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-            g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON)
+            // Fractional metrics are deliberately left alone, which means off.
+            //
+            // Swing lays text out and hit-tests it with integer advances: the rectangles behind
+            // a selection, the caret position, and which character the pointer is over are all
+            // computed from FontMetrics obtained outside this method, where a hint set here is
+            // not in effect. Painting the glyphs with fractional advances therefore drew them
+            // somewhere other than where every other part of the component believed they were,
+            // and the error accumulated along the line — so a selection covered the wrong
+            // letters, and dragging through the text made it appear to shift and collide,
+            // worst of all in a font whose advances round differently from the default one.
+            //
+            // Matching the layout is what makes the two agree. It is also what the caret
+            // already did a few hundred lines up, which is why the caret stayed put while the
+            // text under it moved.
             super.paintComponent(g2)
 
             // Use document.length (O(1)) instead of text.length (O(n) serialisation).

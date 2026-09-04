@@ -3,10 +3,14 @@ package com.github.ahatem.qtranslate.core.main.domain.usecase
 import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.Service
+import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.ahatem.qtranslate.api.translator.TranslationResponse
 import com.github.ahatem.qtranslate.api.translator.TranslationRequest
 import com.github.ahatem.qtranslate.api.translator.Translator
 import com.github.ahatem.qtranslate.core.main.domain.model.ServiceLatency
 import com.github.ahatem.qtranslate.core.shared.logging.LoggerFactory
+import com.github.michaelbull.result.Err
+import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.get
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
@@ -69,19 +73,31 @@ class MeasureServiceLatencyUseCase(
         )
 
         val startedAt = System.nanoTime()
-        val reply = runCatching {
-            withTimeoutOrNull(TIMEOUT_MS) { translator.translate(request).get() }
-        }.getOrElse { failure ->
+
+        // The call's own result is kept rather than unwrapped here, so that "the deadline passed"
+        // stays distinguishable from "the service answered with an error". Unwrapping first made
+        // both of them null and cost the difference the picker now reports.
+        val outcome: Result<TranslationResponse, ServiceError>? = try {
+            withTimeoutOrNull(TIMEOUT_MS) { translator.translate(request) }
+        } catch (failure: CancellationException) {
             // A cancelled scope is the window closing, not a slow service, and swallowing it here
             // would report every translator as broken on the way out.
-            if (failure is CancellationException) throw failure
+            throw failure
+        } catch (failure: Exception) {
             logger.warn("Latency probe for '$serviceId' threw: ${failure.message}")
-            null
+            Err(ServiceError.NetworkError(failure.message.orEmpty(), failure))
         }
+
         val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
 
+        if (outcome == null) {
+            logger.info("Latency probe for '$serviceId' was still silent after ${elapsedMs}ms")
+            return ServiceLatency.TimedOut
+        }
+
+        val reply = outcome.get()
         if (reply == null) {
-            logger.info("Latency probe for '$serviceId' failed or timed out after ${elapsedMs}ms")
+            logger.info("Latency probe for '$serviceId' returned an error after ${elapsedMs}ms")
             return ServiceLatency.Failed
         }
 
@@ -100,7 +116,7 @@ class MeasureServiceLatencyUseCase(
 
     private companion object {
         /**
-         * Seven seconds, past which a service is reported as failed.
+         * Seven seconds, past which a service is reported as having timed out.
          *
          * Longer than any translator worth choosing needs, and short enough that the whole list
          * has settled before someone finishes reading it. A service slower than this is not

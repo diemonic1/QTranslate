@@ -83,5 +83,6 @@ data class DialogStrings(
     val pinTooltip: String,
     val unpinTooltip: String,
     val swapTooltip: String = "",
+    val replaceTooltip: String = "",
     val loadingText: String
 )

@@ -61,8 +61,12 @@ import com.github.ahatem.qtranslate.ui.swing.snippingtool.SnippingToolDialog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.sync.withLock
 import java.awt.*
 import com.github.ahatem.qtranslate.ui.swing.shared.util.copyToClipboard
+import com.github.ahatem.qtranslate.ui.swing.shared.util.SystemKeyboardLayout
+import com.github.ahatem.qtranslate.ui.swing.shared.util.ClipboardPrivacy
+import com.github.ahatem.qtranslate.ui.swing.shared.util.SyntheticInput
 import java.awt.datatransfer.StringSelection
 import java.awt.event.*
 import java.net.URI
@@ -213,6 +217,18 @@ class MainAppFrame(
             onSwapLanguages = {
                 mainStore.dispatch(MainIntent.SwapLanguages)
                 mainStore.dispatch(MainIntent.Translate())
+            },
+            // The popup is dismissed first so the window that owns the selection gets focus
+            // back before the paste is synthesized — pasting into a popup that still holds
+            // focus would put the translation nowhere the user can see it.
+            onReplaceSelection = {
+                val translation = mainStore.state.value.translatedText
+                mainStore.dispatch(MainIntent.HideQuickTranslate)
+                if (translation.isNotBlank()) {
+                    // Launched because this is a plain Swing callback. Nothing is sequenced
+                    // after it here, so there is nothing to wait for.
+                    appScope.launch { replaceSelectionInActiveApp(translation) }
+                }
             }
         )
     }
@@ -317,9 +333,18 @@ class MainAppFrame(
         onReplaceWithTranslation = { text ->
             mainStore.dispatch(MainIntent.ReplaceWithTranslation(text))
         },
+        onSwitchKeyboardLayout = { text ->
+            mainStore.dispatch(MainIntent.SwitchKeyboardLayout(text))
+        },
         onCycleTargetLanguage = {
             mainStore.dispatch(MainIntent.CycleTargetLanguage)
         },
+        // Synchronous on purpose: this fires from jkeymaster's own callback thread, and the
+        // whole point is that the marker appears before anything asynchronous has had a
+        // chance to run. MutableStateFlow.update is thread-safe, so no dispatcher hop is
+        // needed to make the write itself safe.
+        onCaptureStarted = { mainStore.dispatch(MainIntent.HotkeyCaptureStarted) },
+        onCaptureFinished = { mainStore.dispatch(MainIntent.HotkeyCaptureFinished) },
         onShowDictionary = { selectedText ->
             appScope.launch {
                 // No longer a toggle. Pressing the hotkey again with the popup open refreshes it
@@ -567,22 +592,32 @@ class MainAppFrame(
         // b) replace-with-translation is running (main window may be visible, but
         //    LoadingIndicator.focusableWindowState=false so it never steals focus)
         appScope.launch(handler) {
+            data class Indicator(
+                val isLoading: Boolean,
+                val popupRequested: Boolean,
+                val isReplacing: Boolean,
+                val isCapturingSelection: Boolean
+            )
             mainStore.state
-                .map { Triple(it.isLoading, it.isQuickTranslateDialogVisible, it.isReplacingSelection) }
+                .map {
+                    Indicator(it.isLoading, it.isQuickTranslateDialogVisible, it.isReplacingSelection, it.isCapturingHotkeySelection)
+                }
                 .distinctUntilChanged()
-                .collect { (isLoading, popupRequested, isReplacing) ->
+                .collect { (isLoading, popupRequested, isReplacing, isCapturing) ->
                     withContext(Dispatchers.Swing) {
-                        // Two cases want the marker, and neither depends on whether the main
-                        // window happens to be open: a popup translation that has been asked for
-                        // but has nothing to show yet, and an inline replace, which has no window
-                        // of its own at all.
+                        // Three cases want the marker, and none of them depend on whether the
+                        // main window happens to be open: a popup translation that has been
+                        // asked for but has nothing to show yet, an inline replace (no window of
+                        // its own at all), and a hotkey whose selection is still being captured
+                        // — the one part of the operation isLoading does not cover, since it is
+                        // not yet known what will be loading.
                         //
                         // It used to also require the main window to be hidden, on the reasoning
                         // that a visible main window shows its own progress. But Ctrl+Q opens the
                         // popup either way, and in that case the main window is not where the user
                         // is looking.
                         val popupPending = popupRequested && !quickTranslateDialog.isVisible
-                        val shouldShow = isLoading && (isReplacing || popupPending)
+                        val shouldShow = isCapturing || (isLoading && (isReplacing || popupPending))
                         loadingIndicator.render(LoadingIndicatorState(isVisible = shouldShow))
                     }
                 }
@@ -649,9 +684,13 @@ class MainAppFrame(
                     is MainEvent.UpdateStatusBar -> withContext(Dispatchers.Swing) {
                         statusBarController.handleEvent(event)
                     }
+                    // Awaited, not launched: the layout switch below has to land after the
+                    // paste, or it changes the layout out from under it.
                     is MainEvent.PasteTranslation -> if (event.translatedText.isNotBlank()) {
-                        pasteTextToActiveApp(event.translatedText)
+                        replaceSelectionInActiveApp(event.translatedText)
                     }
+                    is MainEvent.SwitchSystemKeyboardLayout ->
+                        SystemKeyboardLayout.switchToNext(logger)
                     is MainEvent.ShowUpdateDialog -> withContext(Dispatchers.Swing) {
                         showUpdateDialog(NotificationCode.UpdateAvailable(
                             newVersion = event.newVersion,
@@ -978,26 +1017,73 @@ class MainAppFrame(
     }
 
 
-    private fun pasteTextToActiveApp(text: String) {
-        appScope.launch {
-            runCatching {
-                delay(150) // let any in-flight UI work settle
+    /**
+     * Puts [text] over the selection in whatever window has focus, by way of the clipboard.
+     *
+     * Suspends until the paste has actually gone out, so that anything the caller sequences
+     * after it — switching the keyboard layout, in particular — genuinely happens afterwards.
+     * It used to launch and return, which meant the layout switch was posted while this had not
+     * yet finished waiting for the user's modifiers to come up.
+     *
+     * Shows the same marker a translation in flight shows, for exactly the span this call
+     * takes — the caller's own progress state (isLoading, isReplacingSelection) is typically
+     * already false by the time this runs, since the network round trip that produced [text]
+     * is what it was tracking. Without a marker of its own, the indicator would vanish right
+     * as the visible part of a replace-with-translation or layout switch — the physical paste
+     * — was still happening.
+     */
+    private suspend fun replaceSelectionInActiveApp(text: String) {
+        // Waits rather than gives up: by this point the text has cost a network round trip,
+        // and the capture that produced it has long since released the lock.
+        SyntheticInput.exchange.withLock {
+            withContext(Dispatchers.Swing) { loadingIndicator.render(LoadingIndicatorState(isVisible = true)) }
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            val original = runCatching { clipboard.getContents(null) }.getOrNull()
+            val keepInClipboard =
+                settingsStore.state.value.workingConfiguration.isTranslationKeptInClipboard
+            try {
+                runCatching {
+                    // Cheap insurance against the hotkey's own modifiers still being down; the
+                    // shortcut batch releases whatever is left anyway. See SyntheticInput.
+                    PhysicalKeyState.awaitModifiersReleased(timeoutMs = MODIFIER_WAIT_MS)
 
-                val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-                clipboard.setContents(StringSelection(text), null)
+                    // Restoring the previous contents afterwards is not enough on its own:
+                    // Windows clipboard history keeps every value the clipboard ever held, so
+                    // without this the translation stayed in Win+V whatever we put back.
+                    clipboard.setContents(
+                        if (keepInClipboard) StringSelection(text)
+                        else ClipboardPrivacy.unrecordedText(text),
+                        null
+                    )
+                    SyntheticInput.sendPasteShortcut(logger)
 
-                val robot = Robot()
-                robot.autoDelay = 20
-                robot.keyPress(KeyEvent.VK_CONTROL)
-                robot.keyPress(KeyEvent.VK_V)
-                robot.keyRelease(KeyEvent.VK_V)
-                robot.keyRelease(KeyEvent.VK_CONTROL)
-            }.onFailure {
-                logger.warn("Failed to paste translation: ${it.message}")
+                    // Long enough for the target to have read the clipboard before it is put
+                    // back. There is no reliable moment for this: an application that reads the
+                    // clipboard lazily can still be handed the restored contents instead of the
+                    // translation. A judgement, not a guarantee.
+                    delay(CLIPBOARD_RESTORE_DELAY_MS)
+                }.onFailure {
+                    logger.warn("Failed to paste translation: ${it.message}")
+                }
+            } finally {
+                // The clipboard was borrowed to carry the text across, not claimed. Putting it
+                // back is the default because taking it is a side effect of a feature the user
+                // asked nothing of the clipboard for.
+                if (!keepInClipboard) {
+                    original?.let { runCatching { clipboard.setContents(it, null) } }
+                }
+                withContext(Dispatchers.Swing) {
+                    loadingIndicator.render(LoadingIndicatorState(isVisible = false))
+                }
             }
         }
     }
 
+    /** See the matching constant in MainGlobalKeyListener; the two halves wait alike. */
+    private val MODIFIER_WAIT_MS = 600L
+
+    /** How long the translation stays on the clipboard before the user's own contents return. */
+    private val CLIPBOARD_RESTORE_DELAY_MS = 400L
     private fun applyOrientation(isRtl: Boolean) {
         val orientation = if (isRtl)
             ComponentOrientation.RIGHT_TO_LEFT
@@ -1494,6 +1580,7 @@ class MainAppFrame(
                 pinTooltip = localizer.getString("common.pin"),
                 unpinTooltip = localizer.getString("common.unpin"),
                 swapTooltip = localizer.getString("main_window_language_bar.swap_languages_tooltip"),
+                replaceTooltip = localizer.getString("common.replace_selection"),
                 loadingText = localizer.getString("common.loading")
             )
         )
