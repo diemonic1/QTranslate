@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
  * every layout the user installed, so it is asked instead of guessed at.
  *
  * On anything but Windows this reports nothing and the caller falls back, which is the same shape
- * as the neighbouring [SystemKeyboardLayout] and [PhysicalKeyState].
+ * as the neighbouring [SystemKeyboardLayout].
  */
 class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
 

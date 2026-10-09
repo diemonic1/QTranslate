@@ -10,27 +10,34 @@ import com.github.ahatem.qtranslate.api.translator.TranslationRequest
 import com.github.ahatem.qtranslate.api.translator.TranslationResponse
 import com.github.ahatem.qtranslate.api.translator.Translator
 import com.github.ahatem.qtranslate.plugins.common.ApiConfig
+import com.github.ahatem.qtranslate.plugins.common.PluginJson
 import com.github.ahatem.qtranslate.plugins.common.createJsonParser
-import com.github.ahatem.qtranslate.plugins.common.fetchJson
+import com.github.ahatem.qtranslate.plugins.common.getOnce
 import com.github.ahatem.qtranslate.plugins.common.sendJson
 import com.github.ahatem.qtranslate.plugins.google.common.GoogleLanguageMapper
 import com.github.ahatem.qtranslate.plugins.google.common.translateSingleUrl
 import com.github.ahatem.qtranslate.plugins.google.common.TRANSLATE_CLIENT_ID
 import com.github.ahatem.qtranslate.plugins.google.common.OfficialTranslateResponse
 import com.github.ahatem.qtranslate.plugins.google.common.TranslateResponse
+import com.github.michaelbull.result.Err
+import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import com.github.michaelbull.result.coroutines.coroutineBinding
+import com.github.michaelbull.result.fold
 import com.github.michaelbull.result.toResultOr
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class GoogleTranslatorService(
     private val pluginContext: PluginContext,
     private val settings: GoogleSettings,
     private val httpClient: HttpClient,
     private val languageMapper: GoogleLanguageMapper,
-    private val apiConfig: ApiConfig
+    private val apiConfig: ApiConfig,
+    private val endpointHealth: GoogleEndpointHealth
 ) : Translator {
 
 
@@ -69,12 +76,13 @@ class GoogleTranslatorService(
         val sourceTag = languageMapper.toProviderCode(request.sourceLanguage)
         val targetTag = languageMapper.toProviderCode(request.targetLanguage)
 
-        val requestBody = mapOf(
-            "q" to request.text,
-            "source" to sourceTag,
-            "target" to targetTag,
-            "format" to "text"
-        )
+        // The official API rejects "source":"auto"; auto detection is requested by omitting it.
+        val requestBody = buildMap {
+            put("q", request.text)
+            if (request.sourceLanguage != LanguageCode.AUTO) put("source", sourceTag)
+            put("target", targetTag)
+            put("format", "text")
+        }
 
         val responseString = httpClient.sendJson(
             url = TRANSLATE_OFFICIAL,
@@ -102,11 +110,50 @@ class GoogleTranslatorService(
         val sourceTag = languageMapper.toProviderCode(request.sourceLanguage)
         val targetTag = languageMapper.toProviderCode(request.targetLanguage)
 
-        val primaryResult = tryPrimaryEndpoint(request.text, sourceTag, targetTag)
-        if (primaryResult.isOk) return primaryResult
+        val permit = endpointHealth.tryAcquirePrimary()
+        if (permit == null) {
+            pluginContext.logger.info("Primary endpoint unhealthy, using fallback")
+        } else {
+            // The permit is released on every path exactly once, including cancellation and any
+            // error escaping the primary attempt, so an abandoned probe never strands the circuit.
+            try {
+                val primaryResult = tryPrimaryEndpoint(request.text, sourceTag, targetTag)
+                primaryResult.fold(
+                    success = {
+                        currentCoroutineContext().ensureActive()
+                        endpointHealth.recordSuccess(permit)
+                        return primaryResult
+                    },
+                    failure = { error ->
+                        currentCoroutineContext().ensureActive()
+                        if (error.suppressesFallback()) return Err(error)
+                        if (error.isRetryable) endpointHealth.recordTransientFailure(permit, error)
+                    }
+                )
+                pluginContext.logger.info("Primary endpoint failed, trying fallback")
+            } finally {
+                endpointHealth.releasePrimary(permit)
+            }
+        }
 
-        pluginContext.logger.info("Primary endpoint failed, trying fallback")
+        currentCoroutineContext().ensureActive()
         return tryFallbackEndpoint(request.text, sourceTag, targetTag)
+    }
+
+    /**
+     * Whether a primary failure is about the request itself rather than the endpoint's reachability.
+     * The request would fail identically against the fallback, so these errors are returned as-is
+     * and leave the circuit untouched. Every other error, including a 200 response whose body the
+     * parser cannot decode, still falls back, because the secondary host speaks a different protocol
+     * and may well serve it.
+     */
+    private fun ServiceError.suppressesFallback(): Boolean = when (this) {
+        is ServiceError.AuthenticationError,
+        is ServiceError.InvalidInputError,
+        is ServiceError.ValidationError,
+        is ServiceError.UnsupportedLanguageError,
+        is ServiceError.ConfigurationError -> true
+        else -> false
     }
 
     private suspend fun tryPrimaryEndpoint(
@@ -114,7 +161,7 @@ class GoogleTranslatorService(
         sourceTag: String,
         targetTag: String
     ): Result<TranslationResponse, ServiceError> = coroutineBinding {
-        val responseString = httpClient.get(
+        val responseString = httpClient.getOnce(
             url = translateSingleUrl(settings.translateHost),
             headers = apiConfig.createHeaders(),
             queryParams = mapOf(
@@ -146,7 +193,7 @@ class GoogleTranslatorService(
         sourceTag: String,
         targetTag: String
     ): Result<TranslationResponse, ServiceError> = coroutineBinding {
-        val parsed: JsonArray = httpClient.fetchJson<JsonArray>(
+        val responseString = httpClient.get(
             url = TRANSLATE_FALLBACK,
             headers = apiConfig.createHeaders(),
             queryParams = mapOf(
@@ -158,48 +205,49 @@ class GoogleTranslatorService(
             )
         ).bind()
 
-        val (translated, detectedTag) = readFallbackTranslation(parsed)
-
-        val translatedText = translated
-            .toResultOr { ServiceError.InvalidResponseError("No translation in fallback response", null) }
-            .bind()
-
-        val detectedLang = detectedTag?.let { languageMapper.fromProviderCode(it) }
-
-        TranslationResponse(
-            translatedText = translatedText.trim(),
-            detectedLanguage = detectedLang
-        )
+        parseFallbackResponse(responseString).bind()
     }
 
     /**
-     * Reads the translation and detected language out of whichever shape the fallback returned.
-     *
-     * This endpoint answers in two different shapes depending on the request, and the difference
-     * is not documented anywhere:
-     *
-     * ```
-     * sl=auto  ->  [["transcription","de"]]   nested, carries the detected language
-     * sl=de    ->  ["transcription"]          flat, no language to report
-     * ```
-     *
-     * Only the nested form was handled, and the type it was decoded into made the flat one a
-     * parse failure rather than a missing field — so naming a source language explicitly, instead
-     * of leaving it on auto-detect, silently cost the user the fallback entirely. It went
-     * unnoticed because auto-detect is the default, and it only bites once the primary endpoint
-     * has already failed, which is exactly when the fallback is the last thing standing.
-     *
-     * Decoded as a [JsonArray] rather than a typed shape because the two forms have no common
-     * static type: the outer array holds a string in one and an array in the other.
+     * Parses the fallback endpoint's response, which is not documented and has been observed in two
+     * array shapes. The payload is inspected field by field rather than decoded into a fixed type, so
+     * an unexpected shape fails normally instead of throwing while indexing.
      */
-    private fun readFallbackTranslation(parsed: JsonArray): Pair<String?, String?> =
-        when (val first = parsed.firstOrNull()) {
-            is JsonArray -> first.getOrNull(0)?.contentOrNull() to first.getOrNull(1)?.contentOrNull()
-            is JsonPrimitive -> first.contentOrNull() to null
-            else -> null to null
+    private fun parseFallbackResponse(
+        responseString: String
+    ): Result<TranslationResponse, ServiceError> {
+        val root = runCatching { PluginJson.parseToJsonElement(responseString) }
+            .getOrElse { return Err(ServiceError.InvalidResponseError("Fallback response is not valid JSON", it)) }
+
+        val fields = fallbackFields(root)
+            ?: return Err(ServiceError.InvalidResponseError("Unsupported fallback response shape", null))
+
+        val translatedText = fields.firstOrNull()?.stringOrNull()?.trim()
+        if (translatedText.isNullOrEmpty()) {
+            return Err(ServiceError.InvalidResponseError("No translation in fallback response", null))
         }
 
-    /** The element's text, or null when it is not a plain string — `JSON null` included. */
-    private fun JsonElement.contentOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val detectedLanguage = fields.getOrNull(1)
+            ?.stringOrNull()
+            ?.let { languageMapper.fromProviderCode(it) }
+
+        return Ok(TranslationResponse(translatedText = translatedText, detectedLanguage = detectedLanguage))
+    }
+
+    /**
+     * Extracts the flat field list from the two known fallback shapes: a nested
+     * `[[translated, src, ...]]` or a flat `[translated, src, ...]`. Any other shape yields null.
+     */
+    private fun fallbackFields(root: JsonElement): List<JsonElement>? = when (root) {
+        is JsonArray -> when (val first = root.firstOrNull()) {
+            is JsonArray -> first.toList()
+            is JsonPrimitive -> root.toList()
+            else -> null
+        }
+        else -> null
+    }
+
+    private fun JsonElement.stringOrNull(): String? =
+        (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 }

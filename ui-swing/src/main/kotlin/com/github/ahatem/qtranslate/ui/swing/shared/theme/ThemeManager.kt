@@ -9,10 +9,22 @@ import java.io.File
 
 class ThemeManager(
     appDataDirectory: File,
-    private val logger: Logger
+    private val logger: Logger,
+    // Where the bundled distribution keeps its theme files, when that differs from the user's own
+    // folder. Themes ship as loose `themes/*.theme.json` files rather than as classpath resources, so
+    // an installed copy finds them here while everything a user adds is read from appDataDirectory.
+    // Null when the two are one folder, as in a portable distribution.
+    installationRoot: File? = null
 ) {
 
-    private val customThemesDirectory = File(appDataDirectory, "themes").also { it.mkdirs() }
+    /**
+     * Theme folders to scan, user's own first. A user file wins a name collision with a shipped
+     * one; see [ThemeManager] for why the ids of the two never collide anyway.
+     */
+    private val customThemeDirectories: List<File> = listOfNotNull(
+        File(appDataDirectory, "themes").also { it.mkdirs() },
+        installationRoot?.takeIf { it != appDataDirectory }?.let { File(it, "themes") }
+    )
 
     // @formatter:off
     private val builtInThemes: List<Theme> = listOf(
@@ -28,9 +40,7 @@ class ThemeManager(
         createCustomTheme("godot_dark",          "Godot Dark",           true,  "themes/godot_theme.theme.json"),
         createCustomTheme("kintsugi_dark",       "Kintsugi Dark",        true,  "themes/kintsugi.theme.json"),
         createCustomTheme("espresso_light",      "Espresso Light",       false, "themes/espresso_light.theme.json"),
-        createCustomTheme("salmon_light",        "Salmon Light",         false, "themes/Salmon.theme.json"),
         createCustomTheme("cool_dark",           "Cool Dark",            true,  "themes/cool_dark.theme.json"),
-        createCustomTheme("clean_sheet",         "Clean Sheet Light",    false, "themes/clean_sheet.theme.json"),
         createCustomTheme("vitesse_black",       "Vitesse Black",        true,  "themes/vitesse.black.theme.json"),
         createCustomTheme("vitesse_dark",        "Vitesse Dark",         true,  "themes/vitesse.dark.theme.json"),
         createCustomTheme("vitesse_dark_soft",   "Vitesse Dark Soft",    true,  "themes/vitesse.dark.soft.theme.json"),
@@ -86,7 +96,12 @@ class ThemeManager(
     fun getLightThemes(): List<Theme> = allThemes.filter { !it.isDark }
 
     fun findThemeById(id: String?): Theme {
-        val resolvedId = if (id == OS_DEFAULT_THEME_ID) systemDefaultThemeId else id
+        val requestedId = if (id == OS_DEFAULT_THEME_ID) systemDefaultThemeId else id
+        val resolvedId = requestedId?.let { savedId ->
+            legacyExternalThemeIds[savedId]
+                ?.takeIf(themeCache::containsKey)
+                ?: savedId
+        }
 
         // Fast path – cache hit
         if (resolvedId != null && themeCache.containsKey(resolvedId)) return themeCache[resolvedId]!!
@@ -170,13 +185,22 @@ class ThemeManager(
     // External theme discovery
     // ═══════════════════════════════════════════════════════════════════════════
 
+    /**
+     * Themes found on disk, from the user's own folder first and the installation's after it.
+     *
+     * De-duplicated by id keeping the first found, and [customThemeDirectories] is in precedence
+     * order with the user's own folder first, so a user's file wins over a shipped one of the same
+     * name instead of appearing twice in the list.
+     */
     fun discoverExternalThemes(): List<Theme> {
-        if (!customThemesDirectory.exists()) return emptyList()
-
-        return customThemesDirectory
-            .listFiles { f -> f.isFile && f.extension == "json" && f.name.contains("theme", ignoreCase = true) }
-            ?.mapNotNull { file -> loadExternalTheme(file) }
-            ?: emptyList()
+        val byId = LinkedHashMap<String, Theme>()
+        customThemeDirectories.forEach { directory ->
+            if (!directory.isDirectory) return@forEach
+            directory
+                .listFiles { f -> f.isFile && f.extension == "json" && f.name.contains("theme", ignoreCase = true) }
+                ?.forEach { file -> loadExternalTheme(file)?.let { byId.putIfAbsent(it.id, it) } }
+        }
+        return byId.values.toList()
     }
 
     private fun loadExternalTheme(file: File): Theme? = try {
@@ -246,6 +270,12 @@ class ThemeManager(
     companion object {
         /** Sentinel theme ID that resolves to the OS-preferred dark/light theme at apply time. */
         const val OS_DEFAULT_THEME_ID = "os_default"
+
+        /** Keeps theme selections from releases where these files were embedded in the JAR. */
+        private val legacyExternalThemeIds = mapOf(
+            "custom:salmon_light" to "external:salmon.theme",
+            "custom:clean_sheet" to "external:clean_sheet.theme"
+        )
 
         private val os: String = System.getProperty("os.name", "").lowercase()
 

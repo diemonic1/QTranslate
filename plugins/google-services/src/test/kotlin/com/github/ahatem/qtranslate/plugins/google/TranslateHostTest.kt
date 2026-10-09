@@ -86,7 +86,7 @@ class TranslateHostTest {
             .lookup(DictionaryRequest("book", LanguageCode.ENGLISH))
 
         val spellClient = UrlRecordingHttpClient()
-        GoogleSpellCheckerService(FakePluginContext(), settings, spellClient, GoogleLanguageMapper, ApiConfig())
+        GoogleSpellCheckerService(FakePluginContext(), settings, spellClient, GoogleLanguageMapper, ApiConfig(), GoogleEndpointHealth())
             .check(SpellCheckRequest("teh cat", LanguageCode.ENGLISH))
 
         // A region that applied to translation alone would leave the dictionary and the spell
@@ -111,7 +111,8 @@ class TranslateHostTest {
         settings = GoogleSettings(translateHost = host),
         httpClient = client,
         languageMapper = GoogleLanguageMapper,
-        apiConfig = ApiConfig()
+        apiConfig = ApiConfig(),
+        endpointHealth = GoogleEndpointHealth()
     )
 }
 

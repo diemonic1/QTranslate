@@ -118,10 +118,13 @@ class PluginsPanel(
     }
 
     init {
-        // PluginsPanel overrides the SettingsPanel GridBag layout
+        // PluginsPanel overrides the SettingsPanel GridBag layout, but its outer edge still
+        // matches SettingsPanel.EDGE (scaled) so the page doesn't read as a different density
+        // from its siblings the moment the sidebar selects it.
         removeAll()
         layout = BorderLayout()
-        border = BorderFactory.createEmptyBorder(10, 8, 8, 10)
+        val edge = UIScale.scale(SettingsPanel.EDGE)
+        border = BorderFactory.createEmptyBorder(edge, UIScale.scale(8), UIScale.scale(8), edge)
 
         searchField.apply {
             putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT,
@@ -684,10 +687,14 @@ class PluginsPanel(
             PluginStatus.FAILED -> Unit
         }
 
-        rightGroup.add(JButton(localizationManager.getString("settings_plugins.btn_uninstall")).apply {
-            foreground = UIManager.getColor("Actions.Red") ?: Color.RED
-            addActionListener { onUninstall(plugin) }
-        })
+        // A bundled plugin's JAR belongs to the installation, so uninstalling it could not be honoured.
+        // Disable is offered instead, which genuinely turns it off.
+        if (plugin.uninstallable) {
+            rightGroup.add(JButton(localizationManager.getString("settings_plugins.btn_uninstall")).apply {
+                foreground = UIManager.getColor("Actions.Red") ?: Color.RED
+                addActionListener { onUninstall(plugin) }
+            })
+        }
 
         actionBar.add(leftGroup,  BorderLayout.LINE_START)
         actionBar.add(rightGroup, BorderLayout.LINE_END)
@@ -841,6 +848,8 @@ class PluginsPanel(
     }
 
     private fun onUninstall(plugin: PluginState) {
+        // Re-checked here because the button is rebuilt from a snapshot that may predate a change.
+        if (pluginManager.isBundled(plugin.manifest.id)) return
         val confirmed = JOptionPane.showConfirmDialog(
             this,
             localizationManager.getString("settings_plugins.uninstall_confirm_msg").format(plugin.manifest.name),

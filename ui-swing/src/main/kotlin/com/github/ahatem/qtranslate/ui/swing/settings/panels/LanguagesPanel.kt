@@ -3,6 +3,8 @@ package com.github.ahatem.qtranslate.ui.swing.settings.panels
 import com.formdev.flatlaf.util.UIScale
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
+import com.github.ahatem.qtranslate.core.localization.getDisplayName
+import com.github.ahatem.qtranslate.ui.swing.shared.widgets.DisplayValueRenderer
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.LanguageComboBox
 import com.github.ahatem.qtranslate.core.settings.data.TranslationRule
 import com.github.ahatem.qtranslate.core.settings.mvi.SettingsIntent
@@ -180,7 +182,7 @@ class LanguagesPanel(
             setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
             tableHeader.reorderingAllowed = false
             tableHeader.resizingAllowed   = true
-            rowHeight               = 28
+            rowHeight               = UIScale.scale(28)
             showHorizontalLines     = true
             showVerticalLines       = false
             intercellSpacing        = Dimension(0, 1)
@@ -235,10 +237,10 @@ class LanguagesPanel(
 
     private fun showAddRuleDialog() {
         val sourceCombo = JComboBox<String>(COMMON_LANGUAGES).apply {
-            setRenderer { _, value, _, _, _ -> JLabel(localizedName(value ?: "")) }
+            renderer = DisplayValueRenderer<String>(text = { localizedName(it ?: "") })
         }
         val targetCombo = JComboBox<String>(COMMON_LANGUAGES).apply {
-            setRenderer { _, value, _, _, _ -> JLabel(localizedName(value ?: "")) }
+            renderer = DisplayValueRenderer<String>(text = { localizedName(it ?: "") })
         }
 
         val panel = JPanel(GridBagLayout()).apply {
@@ -337,11 +339,7 @@ class LanguagesPanel(
     // Helpers
     // -------------------------------------------------------------------------
 
-    private fun localizedName(code: String): String {
-        val locale = runCatching { java.util.Locale.forLanguageTag(code) }.getOrNull()
-        val name   = locale?.getDisplayLanguage(java.util.Locale.ENGLISH)
-        return if (!name.isNullOrBlank() && name != code) name else code
-    }
+    private fun localizedName(code: String): String = settingsPanelLocalizedName(code)
 
 
 
@@ -349,3 +347,6 @@ class LanguagesPanel(
         val COMMON_LANGUAGES = LanguageCode.all().toTypedArray()
     }
 }
+
+internal fun settingsPanelLocalizedName(code: String): String =
+    runCatching { LanguageCode(code).getDisplayName() }.getOrElse { code }

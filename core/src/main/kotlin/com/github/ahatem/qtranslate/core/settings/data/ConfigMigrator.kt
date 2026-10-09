@@ -24,7 +24,7 @@ object ConfigMigrator {
      * would skip every migration it needs. A configuration this build creates from scratch is
      * stamped with this value instead.
      */
-    internal const val CURRENT_VERSION = 6
+    internal const val CURRENT_VERSION = 8
 
     /** The old defaults, frozen: this is what "the user never changed it" looked like. */
     private const val LEGACY_POPUP_IDLE_SECONDS = 3
@@ -154,9 +154,51 @@ object ConfigMigrator {
                         }
                 )
             }
+            6 -> {
+                // v6 → v7: replace the old icon-only switch with the complete selection action.
+                // The nullable compatibility field exists solely because Configuration is
+                // decoded before this migrator runs. Clearing it prevents obsolete state from
+                // being emitted by the next save.
+                logger.info("ConfigMigrator: migrating v6 → v7 — converting mouse-selection behavior")
+                config.copy(
+                    configVersion = 7,
+                    selectionBehavior = config.legacySelectionIconEnabled?.let { enabled ->
+                        if (enabled) SelectionBehavior.SHOW_ICON else SelectionBehavior.OFF
+                    } ?: config.selectionBehavior,
+                    legacySelectionIconEnabled = null
+                )
+            }
+            7 -> {
+                // v7 → v8: SWITCH_KEYBOARD_LAYOUT was added. Patched in like the other new
+                // actions, except that the accelerator has to be chosen: Legacy's Ctrl+Shift+L is
+                // Modern's LISTEN_TO_TEXT, so the plain default would put two global actions on
+                // one key for anyone on Modern. The first preset's binding that is still free wins,
+                // which also keeps a Legacy or Modern user identified as that preset afterwards.
+                logger.info("ConfigMigrator: migrating v7 → v8 — adding the keyboard layout hotkey")
+                val hasIt = config.hotkeys.any { it.action == HotkeyAction.SWITCH_KEYBOARD_LAYOUT }
+                config.copy(
+                    configVersion = 8,
+                    hotkeys = if (hasIt) config.hotkeys else config.hotkeys + switchLayoutBindingFor(config.hotkeys)
+                )
+            }
             else -> {
                 logger.warn("ConfigMigrator: unknown configVersion ${config.configVersion} — returning unchanged")
                 config
             }
         }
+
+    /**
+     * The keyboard-layout binding to hand someone who already has [existing] bindings.
+     *
+     * Tries each preset's choice in turn and takes the first accelerator nobody else is using.
+     * If every one is taken the action arrives unbound, which the hotkey settings show as such:
+     * a missing shortcut is easy to notice and fix, a stolen one is not.
+     */
+    private fun switchLayoutBindingFor(existing: List<HotkeyBinding>): HotkeyBinding {
+        val taken = existing.filter { it.hasBinding }.map { it.keyCode to it.modifiers }.toSet()
+        val candidates = listOf(HotkeyPresets.LEGACY, HotkeyPresets.MODERN)
+            .map { preset -> preset.single { it.action == HotkeyAction.SWITCH_KEYBOARD_LAYOUT } }
+        return candidates.firstOrNull { (it.keyCode to it.modifiers) !in taken }
+            ?: candidates.first().copy(keyCode = 0, modifiers = 0)
+    }
 }

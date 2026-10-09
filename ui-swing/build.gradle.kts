@@ -22,13 +22,18 @@ dependencies {
     implementation(libs.jsvg)
     implementation(libs.miglayout)
 
-    implementation(libs.jnativehook)
-    // Arrives transitively with jnativehook, but SystemKeyboardLayout calls it directly,
-    // and a dependency you compile against belongs in the build file that compiles it.
+    implementation(libs.jna)
+    // User32 bindings for reading and switching keyboard layouts (SystemKeyboardLayout,
+    // WindowsKeyboardLayouts). Nothing else in the application needs it.
     implementation(libs.jnaPlatform)
-    implementation(libs.jkeymaster)
+    implementation(libs.qinput)
 
     implementation(libs.commonmark)
 
     testImplementation(kotlin("test"))
+    testImplementation(libs.kotlinxCoroutinesTest)
+    // Test-only: production code never references FlatInterFont from this module — AppUiSetup in
+    // :app is the only runtime caller — but the font-resolution tests want a real bundled family
+    // to prove toFont() loads it lazily.
+    testImplementation(libs.flatlaf.fonts.inter)
 }

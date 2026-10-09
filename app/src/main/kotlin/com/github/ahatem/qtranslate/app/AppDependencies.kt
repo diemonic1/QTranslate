@@ -17,6 +17,7 @@ import com.github.ahatem.qtranslate.core.main.domain.usecase.RewriteUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.SummarizeUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.TranslateStringUseCase
 import com.github.ahatem.qtranslate.core.main.domain.usecase.TranslateTextUseCase
+import com.github.ahatem.qtranslate.core.main.domain.usecase.ParallelComparisonUseCase
 import com.github.ahatem.qtranslate.core.main.mvi.MainStore
 import com.github.ahatem.qtranslate.core.plugin.PluginManager
 import com.github.ahatem.qtranslate.core.plugin.text.LocalizedPluginTextResolver
@@ -56,7 +57,11 @@ import com.github.ahatem.qtranslate.core.document.DocumentTranslationUseCase
  * and consumed by the UI layer.
  *
  * Everything in this class is a singleton for the lifetime of the process.
- * The [appScope] is the root coroutine scope — cancelling it shuts everything down.
+ * [appScope] is the root coroutine scope: work started here dies with it. Cancelling it is
+ * necessary but not sufficient to shut down cleanly: [mainStore], [pluginManager] and
+ * [httpClient] each have their own explicit shutdown/close with real persistence and resource
+ * cleanup, which application shutdown must call directly rather than relying on cancellation
+ * alone. [appScope] is cancelled last, once those have finished.
  */
 class AppDependencies(
     val appScope: CoroutineScope,
@@ -71,7 +76,14 @@ class AppDependencies(
     /** The application's own secrets, distinct from any plugin's. */
     val appSecrets: AppSecretStore,
     /** Where languages, themes and icon sets are read from. */
-    val appDataDirectory: File
+    val appDataDirectory: File,
+    /**
+     * Shared host HTTP client: one connection pool for the host app, used by [Updater] and any
+     * other host-side network call. Distinct from a plugin's own sandboxed client, which the
+     * plugin's lifecycle owns and closes. This one is owned by the application root: closed
+     * exactly once, by application shutdown.
+     */
+    val httpClient: HttpClient
 )
 
 /**
@@ -85,12 +97,13 @@ class AppDependencies(
  * ### Dependency order
  * 1. Coroutine scope
  * 2. Shared HTTP client
- * 3. Infrastructure (buses, plugin manager)
+ * 3. Infrastructure (buses, secret store)
  * 4. Settings store + reactive config state
- * 5. Domain services (history, audio, updater, localisation, themes)
- * 6. Active service resolution
- * 7. Use cases
- * 8. Stores
+ * 5. Plugin manager
+ * 6. Domain services (history, audio, updater, localisation, themes)
+ * 7. Active service resolution
+ * 8. Use cases
+ * 9. Stores
  *
  * @param appData       App data directory (JAR-relative or OS fallback).
  * @param loggerFactory Logger factory used throughout the application.
@@ -101,7 +114,13 @@ suspend fun buildDependencies(
     appData: File,
     loggerFactory: LoggerFactory,
     settingsRepo: SettingsRepository,
-    initialConfig: Configuration
+    initialConfig: Configuration,
+    /**
+     * Where the bundled distribution keeps its plugins, languages, themes and icons, when that is
+     * not the same folder as [appData]. Null in a portable distribution and in development runs,
+     * where the two coincide.
+     */
+    installationRoot: File? = null
 ): AppDependencies {
 
     // ---- 1. Coroutine scope ----
@@ -129,29 +148,14 @@ suspend fun buildDependencies(
     val localizationManager = LocalizationManager(
         appDataDirectory = appData,
         parser           = LanguageTomlParser(logger = loggerFactory.getLogger("LanguageTomlParser")),
-        logger           = loggerFactory.getLogger("LocalizationManager")
+        logger           = loggerFactory.getLogger("LocalizationManager"),
+        installationRoot = installationRoot
     )
 
     // One instance, shared: the settings dialog writes the proxy password and the plugin
     // manager reads it back when building each plugin's client.
     val keyValueStore = PluginKeyValueStore(appData)
     val appSecrets = AppSecretStore(keyValueStore)
-
-    val pluginManager = PluginManager(
-        appDataDirectory            = appData,
-        settingsRepository          = settingsRepo,
-        pluginFingerprintRepository = PluginFingerprintRepository(appData, Json { ignoreUnknownKeys = true; isLenient = true }),
-        pluginKeyValueStore         = keyValueStore,
-        loggerFactory               = loggerFactory,
-        notificationBus             = notificationBus,
-        textResolver                = LocalizedPluginTextResolver(
-            localizationManager = localizationManager,
-            pluginLocalization  = PluginLocalization(
-                parser = LanguageTomlParser(logger = loggerFactory.getLogger("PluginLocalization")),
-                logger = loggerFactory.getLogger("PluginLocalization")
-            )
-        )
-    )
 
     // ---- 4. Settings store + reactive config ----
 
@@ -162,13 +166,31 @@ suspend fun buildDependencies(
         initialConfiguration = initialConfig
     )
 
-    // Use workingConfiguration so in-progress edits are reflected in real time
-    // (e.g. instant translation picks up a newly toggled setting before save).
     val configState: StateFlow<Configuration> = settingsStore.state
         .map { it.workingConfiguration }
         .stateIn(appScope, SharingStarted.Eagerly, initialConfig)
 
-    // ---- 5. Domain services ----
+    // ---- 5. Plugin manager ----
+
+    val pluginManager = PluginManager(
+        appDataDirectory            = appData,
+        settingsRepository          = settingsRepo,
+        pluginFingerprintRepository = PluginFingerprintRepository(appData, Json { ignoreUnknownKeys = true; isLenient = true }),
+        pluginKeyValueStore         = keyValueStore,
+        loggerFactory               = loggerFactory,
+        notificationBus             = notificationBus,
+        networkConfig               = { settingsStore.state.value.originalConfiguration.network },
+        textResolver                = LocalizedPluginTextResolver(
+            localizationManager = localizationManager,
+            pluginLocalization  = PluginLocalization(
+                parser = LanguageTomlParser(logger = loggerFactory.getLogger("PluginLocalization")),
+                logger = loggerFactory.getLogger("PluginLocalization")
+            )
+        ),
+        installationRoot            = installationRoot
+    )
+
+    // ---- 6. Domain services ----
 
     val historyRepo = HistoryRepository(
         appDataDirectory = appData,
@@ -190,19 +212,20 @@ suspend fun buildDependencies(
 
     val themeManager = ThemeManager(
         appDataDirectory = appData,
-        logger           = loggerFactory.getLogger("ThemeManager")
+        logger           = loggerFactory.getLogger("ThemeManager"),
+        installationRoot = installationRoot
     )
 
     val iconManager = IconManager(pluginManager)
 
-    // ---- 6. Active service resolution ----
+    // ---- 7. Active service resolution ----
 
     val activeServiceManager = ActiveServiceManager(
         activeServices = pluginManager.activeServices,
         configuration  = configState
     )
 
-    // ---- 7. Use cases ----
+    // ---- 8. Use cases ----
 
     val checkForUpdatesUseCase = CheckForUpdatesUseCase(
         currentVersion  = AppConstants.APP_VERSION,
@@ -231,6 +254,12 @@ suspend fun buildDependencies(
 
     val translateStringUseCase = TranslateStringUseCase(activeServiceManager)
 
+    val parallelComparisonUseCase = ParallelComparisonUseCase(
+        scope = appScope,
+        activeServiceManager = activeServiceManager,
+        loggerFactory = loggerFactory
+    )
+
     val translateUseCase = TranslateTextUseCase(
         scope                = appScope,
         settingsState        = configState,
@@ -238,7 +267,8 @@ suspend fun buildDependencies(
         historyRepository    = historyRepo,
         summarizeUseCase     = summarizeUseCase,
         rewriteUseCase       = rewriteUseCase,
-        loggerFactory        = loggerFactory
+        loggerFactory        = loggerFactory,
+        parallelComparisonUseCase = parallelComparisonUseCase
     )
 
     val lookupWordUseCase = LookupWordUseCase(
@@ -259,7 +289,7 @@ suspend fun buildDependencies(
         loggerFactory        = loggerFactory
     )
 
-    // ---- 8. Stores ----
+    // ---- 9. Stores ----
 
     val mainStore = MainStore(
         scope                      = appScope,
@@ -302,6 +332,7 @@ suspend fun buildDependencies(
         iconManager         = iconManager,
         themeManager        = themeManager,
         localizationManager = localizationManager,
-        notificationBus     = notificationBus
+        notificationBus     = notificationBus,
+        httpClient          = httpClient
     )
 }
