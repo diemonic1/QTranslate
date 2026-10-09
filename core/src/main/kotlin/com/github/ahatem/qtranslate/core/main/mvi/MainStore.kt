@@ -309,11 +309,11 @@ class MainStore(
                     it.copy(isQuickTranslateDialogVisible = false, isQuickTranslateDialogPinned = false)
                 }
 
-            MainIntent.ToggleQuickTranslateDialogPin ->
-                // Use `it` from the update lambda — not _state.value — to avoid
-                // a data race between the value read and the update being applied.
-                _state.update { it.copy(isQuickTranslateDialogPinned = !it.isQuickTranslateDialogPinned) }
-
+            MainIntent.ToggleQuickTranslateDialogPin ->
+                // Use `it` from the update lambda — not _state.value — to avoid
+                // a data race between the value read and the update being applied.
+                _state.update { it.copy(isQuickTranslateDialogPinned = !it.isQuickTranslateDialogPinned) }
+
             MainIntent.HotkeyCaptureStarted ->
                 _state.update { it.copy(isCapturingHotkeySelection = true) }
 

@@ -159,8 +159,8 @@ sealed interface MainIntent : UiIntent {
      * merely entered with the wrong layout active. The replacement is a character-for-character
      * rewrite, not a round trip through a service.
      */
-    data class SwitchKeyboardLayout(val selectedText: String) : MainIntent
-
+    data class SwitchKeyboardLayout(val selectedText: String) : MainIntent
+
     /**
      * A hotkey that needs the current selection was just pressed, before its text has been
      * captured.
