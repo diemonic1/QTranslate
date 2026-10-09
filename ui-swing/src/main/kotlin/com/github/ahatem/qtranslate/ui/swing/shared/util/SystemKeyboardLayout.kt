@@ -43,15 +43,15 @@ object SystemKeyboardLayout {
         }
 
         runCatching {
-            val user32 = com.sun.jna.platform.win32.User32.INSTANCE
+            val user32 = User32Native.INSTANCE
             val foreground = user32.GetForegroundWindow()
                 ?: error("no foreground window")
 
-            user32.PostMessage(
+            user32.PostMessageW(
                 foreground,
                 WM_INPUTLANGCHANGEREQUEST,
-                com.sun.jna.platform.win32.WinDef.WPARAM(INPUTLANGCHANGE_FORWARD.toLong()),
-                com.sun.jna.platform.win32.WinDef.LPARAM(0)
+                com.sun.jna.Pointer(INPUTLANGCHANGE_FORWARD.toLong()),
+                null
             )
         }.onFailure { failure ->
             reportUnavailable(logger, failure.message ?: failure::class.simpleName.orEmpty())

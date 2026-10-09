@@ -23,9 +23,6 @@ dependencies {
     implementation(libs.miglayout)
 
     implementation(libs.jna)
-    // User32 bindings for reading and switching keyboard layouts (SystemKeyboardLayout,
-    // WindowsKeyboardLayouts). Nothing else in the application needs it.
-    implementation(libs.jnaPlatform)
     implementation(libs.qinput)
 
     implementation(libs.commonmark)

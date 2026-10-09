@@ -89,6 +89,11 @@ data class TranslationProviderState(
     val fontConfig: FontConfig,
     val fallbackFontConfig: FontConfig,
     val selectorState: TranslatorSelectorState? = null,
+    /**
+     * False shows the body alone: no service name, no badge, no status line. For a single
+     * translation, where there is nothing to tell apart and the header would only be noise.
+     */
+    val showHeader: Boolean = true,
     val onCopy: (String) -> Unit = {},
     val onListen: (String) -> Unit = {},
     val onStop: () -> Unit = {},
@@ -262,7 +267,7 @@ class TranslationProviderView(
 
     private val definitionStrip = DefinitionStrip(showDivider = false)
 
-    private val bodyStack = JPanel(CardLayout()).apply {
+    private val bodyStack = JPanel(VisibleCardLayout()).apply {
         isOpaque = false
         add(bodyRow, BODY_CARD)
         add(placeholderPanel, PLACEHOLDER_CARD)
@@ -357,6 +362,16 @@ class TranslationProviderView(
             fallbackFontConfig = state.fallbackFontConfig,
             selectorState = state.selectorState
         )
+        // Ahead of the render key: the key leaves this out, and the header has to follow it even
+        // when nothing else about the provider changed.
+        if (header.isVisible != state.showHeader) {
+            header.isVisible = state.showHeader
+            rail.isVisible = state.showHeader
+            applyPresentation(state)
+            revalidate()
+            repaint()
+        }
+
         val keyChanged = key != lastRenderKey
         lastRenderKey = key
         if (!keyChanged) return
@@ -378,9 +393,17 @@ class TranslationProviderView(
         headerTrailingPad = if (quick) 8 else 6
         applyHeaderBorder()
         val bodyPad = if (quick) 8 else 12
-        val bodyBottom = if (quick) 8 else 10
+        // Without a header the text is the whole provider, and the gap that separated it from the
+        // header and from the next provider has nothing left to separate.
+        val headerless = !state.showHeader
+        val bodyTop = if (headerless) 0 else 2
+        val bodyBottom = when {
+            headerless -> 2
+            quick -> 8
+            else -> 10
+        }
         bodyStack.border = BorderFactory.createEmptyBorder(
-            UIScale.scale(2),
+            UIScale.scale(bodyTop),
             UIScale.scale(bodyPad),
             UIScale.scale(bodyBottom),
             UIScale.scale(bodyPad)
@@ -393,6 +416,10 @@ class TranslationProviderView(
             0, UIScale.scale(bodyPad), UIScale.scale(6), UIScale.scale(bodyPad)
         )
         textPane.margin = Insets(0, 0, 0, 0)
+        // The popup sizes itself to this view, so it must ask for the card it shows rather than
+        // the tallest one it could show. The main window keeps measuring every card, which holds a
+        // provider's height steady as it moves between loading and result.
+        (bodyStack.layout as VisibleCardLayout).measureVisibleOnly = quick
         providerIcon.preferredSize = Dimension(UIScale.scale(16), UIScale.scale(16))
         rail.isOpaque = state.role == ProviderRole.PRIMARY
         if (rail.isOpaque) refreshRail()
@@ -802,5 +829,29 @@ private class LeadingFitLayout : LayoutManager {
             val x = if (parent.componentOrientation.isLeftToRight) insets.left else parent.width - insets.right - width
             child.setBounds(x, insets.top, width, parent.height - insets.top - insets.bottom)
         }
+    }
+}
+
+/**
+ * A [CardLayout] that can size itself to the card on show instead of the largest card it holds.
+ *
+ * CardLayout's preferred size is the maximum over every card, hidden ones included. For the popup
+ * that meant a one-line translation asked for the height of the two-line placeholder behind it:
+ * auto-size opened the window taller than the text, and shrinking the window to the text brought
+ * up a scroll bar for content that already fitted.
+ */
+internal class VisibleCardLayout : CardLayout() {
+
+    var measureVisibleOnly: Boolean = false
+
+    override fun preferredLayoutSize(parent: Container): Dimension {
+        if (!measureVisibleOnly) return super.preferredLayoutSize(parent)
+        val shown = parent.components.firstOrNull { it.isVisible } ?: return super.preferredLayoutSize(parent)
+        val insets = parent.insets
+        val size = shown.preferredSize
+        return Dimension(
+            size.width + insets.left + insets.right + hgap * 2,
+            size.height + insets.top + insets.bottom + vgap * 2
+        )
     }
 }

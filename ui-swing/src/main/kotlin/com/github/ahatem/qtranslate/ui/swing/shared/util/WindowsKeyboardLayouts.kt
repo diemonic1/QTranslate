@@ -4,8 +4,8 @@ import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.core.keyboard.KeyboardLayoutTransition
 import com.github.ahatem.qtranslate.core.keyboard.KeyboardLayouts
 import com.sun.jna.Pointer
-import com.sun.jna.platform.win32.User32
-import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.Memory
+import com.sun.jna.Native
 import com.sun.jna.ptr.IntByReference
 import java.util.concurrent.ConcurrentHashMap
 
@@ -47,7 +47,7 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
         }
 
         return runCatching {
-            val user32 = User32.INSTANCE
+            val user32 = User32Native.INSTANCE
             val installed = installedLayouts(user32)
             if (installed.size < 2) return emptyList()
 
@@ -80,13 +80,12 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
 
     // -------------------------------------------------------------------------
 
-    private fun installedLayouts(user32: User32): List<WinDef.HKL> {
+    private fun installedLayouts(user32: User32Native): List<Pointer> {
         val count = user32.GetKeyboardLayoutList(0, null)
         if (count <= 0) return emptyList()
-        val buffer = arrayOfNulls<WinDef.HKL>(count)
-        @Suppress("UNCHECKED_CAST")
-        val written = user32.GetKeyboardLayoutList(count, buffer as Array<WinDef.HKL>)
-        return buffer.filterNotNull().take(maxOf(written, 0))
+        val buffer = Memory(count.toLong() * Native.POINTER_SIZE)
+        val written = user32.GetKeyboardLayoutList(count, buffer).coerceIn(0, count)
+        return (0 until written).mapNotNull { buffer.getPointer(it.toLong() * Native.POINTER_SIZE) }
     }
 
     /**
@@ -95,7 +94,7 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
      * Keyboard layout on Windows is per-thread, so asking about our own thread would report the
      * layout of the translator window rather than of whatever the selection came from.
      */
-    private fun foregroundLayout(user32: User32, installed: List<WinDef.HKL>): WinDef.HKL {
+    private fun foregroundLayout(user32: User32Native, installed: List<Pointer>): Pointer {
         val foreground = user32.GetForegroundWindow() ?: return installed.first()
         val threadId = user32.GetWindowThreadProcessId(foreground, IntByReference())
         val layout = user32.GetKeyboardLayout(threadId) ?: return installed.first()
@@ -104,9 +103,9 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
     }
 
     private fun transitionBetween(
-        user32: User32,
-        from: WinDef.HKL,
-        to: WinDef.HKL
+        user32: User32Native,
+        from: Pointer,
+        to: Pointer
     ): KeyboardLayoutTransition {
         val key = handleValue(from) to handleValue(to)
         cache[key]?.let { return it }
@@ -143,12 +142,12 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
      * names it.
      */
     private fun characterAt(
-        user32: User32,
+        user32: User32Native,
         scanCode: Int,
         shifted: Boolean,
-        layout: WinDef.HKL
+        layout: Pointer
     ): Char? {
-        val virtualKey = user32.MapVirtualKeyEx(scanCode, MAPVK_VSC_TO_VK_EX, layout)
+        val virtualKey = user32.MapVirtualKeyExW(scanCode, MAPVK_VSC_TO_VK_EX, layout)
         if (virtualKey == 0) return null
 
         val buffer = CharArray(8)
@@ -187,7 +186,7 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
      * flush stays as the belt to its braces. Twice, because the first call consumes the pending
      * dead key into a composed pair and the second returns to a clean state.
      */
-    private fun flushDeadKey(user32: User32, layout: WinDef.HKL) {
+    private fun flushDeadKey(user32: User32Native, layout: Pointer) {
         val buffer = CharArray(8)
         repeat(2) {
             user32.ToUnicodeEx(
@@ -196,7 +195,7 @@ class WindowsKeyboardLayouts(private val logger: Logger) : KeyboardLayouts {
         }
     }
 
-    private fun handleValue(handle: WinDef.HKL): Long = Pointer.nativeValue(handle.pointer)
+    private fun handleValue(handle: Pointer): Long = Pointer.nativeValue(handle)
 
     private fun reportUnavailable(reason: String) {
         if (unavailableReported) return

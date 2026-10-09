@@ -2,6 +2,7 @@ package com.github.ahatem.qtranslate.ui.swing.quicktranslate
 
 import com.github.ahatem.qtranslate.ui.swing.shared.util.clearBorder
 import com.formdev.flatlaf.extras.FlatSVGIcon
+import com.formdev.flatlaf.util.UIScale
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import com.github.ahatem.qtranslate.core.settings.data.Position
@@ -65,6 +66,19 @@ class QuickTranslateDialog(
         const val FADE_MS = 160
         const val FADE_STEPS = 8
         const val RESIZE_SAVE_DEBOUNCE_MS = 180
+
+        /**
+         * The floor on this popup's height, below the shared [PopupSizing.minHeight].
+         *
+         * The shared floor suits the dictionary and image popups, which are never one line. Here
+         * it left a one-line translation sitting above a band of empty space; auto-size already
+         * makes room for whatever the text needs, so the floor only has to stop the window from
+         * collapsing.
+         */
+        const val MIN_HEIGHT = 70
+
+        /** Space between the popup and the text it is placed against. */
+        const val TEXT_GAP = 6
     }
 
     // Read on use, not cached. This dialog is created once and outlives any number of theme
@@ -120,6 +134,14 @@ class QuickTranslateDialog(
     private var isRenderingLanguages = false
     private val translatorComboBox = TranslatorPopupButton(iconManager, onTranslatorSelected)
 
+    /**
+     * The translator picker for the single-translation popup, where there is no provider header
+     * to hold [translatorComboBox]. An icon in the toolbar, where the popup always kept it before
+     * comparison existed. A second instance rather than the same one moved between parents:
+     * the board owns that one, and a Swing component can only live in one place.
+     */
+    private val toolbarTranslatorButton = TranslatorPopupButton(iconManager, onTranslatorSelected)
+
     // Pin is leftmost: it is the control someone reaches for first, to keep the popup open
     // before doing anything else with it.
     private val pinButton = createToolbarButton(iconManager, Icons.PIN, 14)
@@ -159,10 +181,16 @@ class QuickTranslateDialog(
      * declaration order, so the other way round leaves a window in which assigning isPinned would
      * dereference null.
      */
+    /**
+     * The one minimum size, shared with the edge resizer by reference so that widening it later
+     * also binds a resize by hand. See [refreshMinimumSize] for why the width moves.
+     */
+    private val popupMinimumSize = Dimension(PopupSizing.minWidth(), UIScale.scale(MIN_HEIGHT))
+
     private val popup = FloatingPopupBehavior(
         window = this,
         owner = owner,
-        minimumSize = Dimension(PopupSizing.minWidth(), PopupSizing.minHeight()),
+        minimumSize = popupMinimumSize,
         pinnedBorderWidth = PINNED_BORDER_WIDTH,
         resizeHandle = RESIZE_HANDLE_SIZE
     ).apply {
@@ -336,13 +364,15 @@ class QuickTranslateDialog(
             isRenderingLanguages = false
         }
 
-        translatorComboBox.render(
-            TranslatorSelectorState(
-                availableTranslators = state.translatorSelectorState.availableTranslators,
-                selectedTranslatorId = state.translatorSelectorState.selectedTranslatorId,
-                isLoading = state.isLoading
-            )
+        val selectorState = TranslatorSelectorState(
+            availableTranslators = state.translatorSelectorState.availableTranslators,
+            selectedTranslatorId = state.translatorSelectorState.selectedTranslatorId,
+            isLoading = state.isLoading
         )
+        translatorComboBox.render(selectorState)
+        toolbarTranslatorButton.render(selectorState)
+        toolbarTranslatorButton.isVisible = !state.comparisonsEnabled
+        refreshMinimumSize()
 
         pinButton.toolTipText = withShortcut(
             if (state.isPinned) state.strings.unpinTooltip else state.strings.pinTooltip,
@@ -406,11 +436,15 @@ class QuickTranslateDialog(
                 selectedTranslatorId = selectedId,
                 isLoading = state.isLoading
             ),
+            showHeader = state.comparisonsEnabled,
             onCopy = { text -> text.copyToClipboard() },
             onListen = { onListen() },
             onStop = { onStopListening() }
         )
-        val secondaries = state.comparisonResults.map { result ->
+        // Belt and braces: with comparison off none are requested, but results left over from the
+        // main window's own comparison must not surface here either.
+        val compared = if (state.comparisonsEnabled) state.comparisonResults else emptyList()
+        val secondaries = compared.map { result ->
             val info = state.comparisonProviderInfos[result.serviceId]
             TranslationProviderState(
                 serviceId = result.serviceId,
@@ -520,7 +554,25 @@ class QuickTranslateDialog(
 
 
     // sizing (reuse measurePane; skip heavy ops during resize)
+    /**
+     * Never narrower than the toolbar.
+     *
+     * A fixed floor cannot promise that: the toolbar's width follows the font, the display scale
+     * and the language names, and when the window came out narrower the layout clipped from the
+     * end of the left group, which is where the translator picker sits. Measured from the toolbar
+     * itself, the picker is always on screen.
+     */
+    private fun refreshMinimumSize() {
+        val chrome = if (topPanel.width > 0) width - topPanel.width else UIScale.scale(RESIZE_HANDLE_SIZE) * 2
+        val needed = maxOf(PopupSizing.minWidth(), topPanel.preferredSize.width + chrome)
+        if (needed == popupMinimumSize.width) return
+        popupMinimumSize.width = needed
+        minimumSize = Dimension(popupMinimumSize)
+        if (width in 1 until needed) setSize(needed, height)
+    }
+
     private fun applySize(text: String) {
+        refreshMinimumSize()
         val config = currentConfig ?: return
         if (!config.autoSizeEnabled) {
             size = config.lastKnownSize.toDimension()
@@ -555,16 +607,13 @@ class QuickTranslateDialog(
         measurePane.size = Dimension(maxWidth, Int.MAX_VALUE)
 
         val textWidth = measurePane.preferredSize.width + 40
-        val primaryTextHeight = measurePane.preferredSize.height + 30
-        val contentHeight = max(primaryTextHeight, resultsView.preferredSize.height)
 
         val borderSize = RESIZE_HANDLE_SIZE * 2
         val finalWidth = (textWidth + borderSize)
             .coerceAtMost(maxWidth)
             .coerceAtLeast(minimumSize.width)
 
-        val nonTextHeight = topPanel.preferredSize.height + 20
-        val finalHeight = (contentHeight + nonTextHeight + borderSize)
+        val finalHeight = measuredHeight(finalWidth)
             .coerceAtMost(maxHeight)
             .coerceAtLeast(minimumSize.height)
 
@@ -574,9 +623,86 @@ class QuickTranslateDialog(
         }
     }
 
+    /**
+     * The height that shows every result without scrolling, at [targetWidth], read off the real
+     * layout rather than estimated.
+     *
+     * It used to be a sum of guesses — the text's height plus 30, the toolbar's plus 20, plus the
+     * resize border — and those guesses came to some forty pixels more than the window needed. It
+     * also never matched the scroll pane exactly: the results ask for their own padding and the
+     * scroll pane's border on top of the text, and a window a few pixels short of that sum showed
+     * a scroll bar beside text that plainly fitted.
+     *
+     * So the window is laid out at the width it is about to have, and the height is everything
+     * that is not the results (toolbar, separators, borders, as they really are) plus what the
+     * results report they need at that width. Twice, because a scroll bar showing during the first
+     * pass narrows the text and makes it ask for a little more than it will once the bar is gone.
+     */
+    private fun measuredHeight(targetWidth: Int): Int {
+        // Layout needs a peer. The first time this runs the window has never been shown.
+        if (!isDisplayable) addNotify()
+        var candidate = if (height > 0) height else minimumSize.height
+        repeat(2) {
+            setSize(targetWidth, candidate)
+            validate()
+            val chrome = candidate - resultsView.height
+            candidate = chrome + resultsView.preferredSize.height
+        }
+        return candidate
+    }
+
+    /**
+     * Where the text being translated is on screen, in AWT coordinates, when it could be found.
+     *
+     * Set by the caller just before asking for the popup and spent by the next placement, so a
+     * stale rectangle from an earlier selection is never reused.
+     */
+    @Volatile
+    private var textAnchor: Rectangle? = null
+
+    fun anchorToText(bounds: Rectangle?) {
+        textAnchor = bounds
+    }
+
+    /**
+     * Above the text, so the popup does not cover what it translates; below it when there is no
+     * room above. Aligned to the text's left edge rather than centred: a wide selection would
+     * otherwise put the popup far from where the sentence starts, which is where reading begins.
+     */
+    private fun placeNearText(text: Rectangle) {
+        val gc = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
+            .map { it.defaultConfiguration }
+            .firstOrNull { it.bounds.contains(text.centerX.toInt(), text.centerY.toInt()) }
+            ?: graphicsConfiguration
+        val insets = Toolkit.getDefaultToolkit().getScreenInsets(gc)
+        val screen = gc.bounds.let {
+            Rectangle(
+                it.x + insets.left, it.y + insets.top,
+                it.width - insets.left - insets.right, it.height - insets.top - insets.bottom
+            )
+        }
+        val gap = UIScale.scale(TEXT_GAP)
+
+        val x = text.x.coerceAtMost(screen.x + screen.width - width).coerceAtLeast(screen.x)
+        val above = text.y - gap - height
+        val below = text.y + text.height + gap
+        val y = when {
+            above >= screen.y -> above
+            below + height <= screen.y + screen.height -> below
+            else -> screen.y // taller than the room on either side: keep it on screen
+        }
+        setLocation(x, y)
+    }
+
     private fun applyPosition() {
         val config = currentConfig ?: return
         if (wasManuallyMoved) return
+
+        textAnchor?.let { anchor ->
+            textAnchor = null
+            placeNearText(anchor)
+            return
+        }
 
         if (config.autoPositionEnabled) {
             val mouseLocation = MouseInfo.getPointerInfo()?.location ?: run {
@@ -662,6 +788,7 @@ class QuickTranslateDialog(
             add(sourceLanguageCombo)
             add(swapButton)
             add(targetLanguageCombo)
+            add(toolbarTranslatorButton)
         }
 
         val rightPanel = JPanel().apply {
@@ -716,7 +843,7 @@ class QuickTranslateDialog(
 
         val resizer = ComponentResizer.builder()
             .dragInsets(dragInsets)
-            .minimumSize(minimumSize)
+            .minimumSize(popupMinimumSize)
             .onResizeStart {
                 // freeze opacity and suspend idle timer
                 isResizing = true

@@ -1,11 +1,10 @@
 package com.github.ahatem.qtranslate.ui.swing.quicktranslate
 
+import com.formdev.flatlaf.util.UIScale
 import com.github.ahatem.qtranslate.core.shared.arch.UiState
 import com.github.ahatem.qtranslate.ui.swing.shared.widgets.Renderable
-import java.awt.Dialog
-import java.awt.Dimension
-import java.awt.Frame
-import java.awt.MouseInfo
+import java.awt.*
+import java.awt.geom.RoundRectangle2D
 import javax.swing.*
 
 data class LoadingIndicatorState(
@@ -27,6 +26,8 @@ class LoadingIndicator(owner: Frame) : JWindow(), Renderable<LoadingIndicatorSta
         setLocation(mouseLocation.x, mouseLocation.y + 20)
     }
 
+    private val bar = PillMarqueeBar()
+
     init {
         isAlwaysOnTop = true
         modalExclusionType = Dialog.ModalExclusionType.APPLICATION_EXCLUDE
@@ -34,14 +35,23 @@ class LoadingIndicator(owner: Frame) : JWindow(), Renderable<LoadingIndicatorSta
         focusableWindowState = false
         type = Type.UTILITY
 
-        val progressBar = JProgressBar().apply {
-            isIndeterminate = true
-            preferredSize = Dimension(45, 10)
-            border = BorderFactory.createMatteBorder(2, 2, 2, 2, UIManager.getColor("Button.borderColor").darker())
-            putClientProperty("JProgressBar.square", true)
-        }
-        contentPane.add(progressBar)
+        contentPane = bar
         pack()
+
+        // The window is exactly the bar's bounding box, so without this its square corners would
+        // show around the rounded ends. A fully transparent window is the clean way; where the
+        // platform cannot do per-pixel translucency, the window is cut to the bar's shape instead,
+        // which costs smooth edges but keeps the corners from showing.
+        val translucent = runCatching {
+            GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
+                .isWindowTranslucencySupported(GraphicsDevice.WindowTranslucency.PERPIXEL_TRANSLUCENT)
+        }.getOrDefault(false)
+        if (translucent) {
+            background = Color(0, 0, 0, 0)
+        } else {
+            val arc = height.toDouble()
+            shape = RoundRectangle2D.Double(0.0, 0.0, width.toDouble(), height.toDouble(), arc, arc)
+        }
     }
 
     /** When the marker went up, so a fast result cannot take it down before it was ever seen. */
@@ -58,6 +68,7 @@ class LoadingIndicator(owner: Frame) : JWindow(), Renderable<LoadingIndicatorSta
                 // last left — usually the top-left corner of the screen.
                 MouseInfo.getPointerInfo()?.location?.let { setLocation(it.x, it.y + 20) }
                 shownAt = System.currentTimeMillis()
+                bar.start()
                 isVisible = true
                 positionUpdater.start()
             }
@@ -85,10 +96,81 @@ class LoadingIndicator(owner: Frame) : JWindow(), Renderable<LoadingIndicatorSta
     private fun hideNow() {
         isVisible = false
         positionUpdater.stop()
+        bar.stop()
     }
 
     private companion object {
         /** Long enough to register as "something is happening" rather than as a glitch. */
         const val MINIMUM_VISIBLE_MS = 350L
+    }
+}
+
+/**
+ * A thin rounded track with a short rounded segment sweeping across it, left to right, on repeat —
+ * the marquee the classic QTranslate shows.
+ *
+ * Painted by hand rather than with an indeterminate JProgressBar: the look-and-feel bar is tall,
+ * square, carries a border, and its moving part spans a large share of the track, none of which
+ * reads well at this size. The segment enters from beyond the left end and leaves past the right,
+ * clipped to the track, so it never appears to jump.
+ */
+private class PillMarqueeBar : JComponent() {
+
+    private val trackWidth = UIScale.scale(TRACK_WIDTH)
+    private val trackHeight = UIScale.scale(TRACK_HEIGHT)
+    private val segmentWidth = UIScale.scale(SEGMENT_WIDTH)
+
+    private var startedAt = 0L
+
+    private val ticker = Timer(FRAME_MS) { repaint() }
+
+    init {
+        isOpaque = false
+        preferredSize = Dimension(trackWidth, trackHeight)
+    }
+
+    fun start() {
+        startedAt = System.currentTimeMillis()
+        ticker.start()
+    }
+
+    fun stop() = ticker.stop()
+
+    override fun paintComponent(g: Graphics) {
+        val g2 = g.create() as Graphics2D
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            val w = width.toDouble()
+            val h = height.toDouble()
+            val track = RoundRectangle2D.Double(0.0, 0.0, w, h, h, h)
+
+            g2.color = UIManager.getColor("ProgressBar.background") ?: Color(0xD0D0D0)
+            g2.fill(track)
+
+            // Position along one sweep, from fully off the left end to fully off the right.
+            val travel = w + segmentWidth
+            val phase = ((System.currentTimeMillis() - startedAt) % SWEEP_MS).toDouble() / SWEEP_MS
+            val x = phase * travel - segmentWidth
+
+            g2.clip(track)
+            g2.color = UIManager.getColor("ProgressBar.foreground")
+                ?: UIManager.getColor("Component.accentColor")
+                ?: Color(0x2675BF)
+            g2.fill(RoundRectangle2D.Double(x, 0.0, segmentWidth.toDouble(), h, h, h))
+        } finally {
+            g2.dispose()
+        }
+    }
+
+    private companion object {
+        const val TRACK_WIDTH = 44
+        const val TRACK_HEIGHT = 5
+        const val SEGMENT_WIDTH = 14
+
+        /** One pass across the track. Quick enough to read as busy, slow enough to follow. */
+        const val SWEEP_MS = 1100L
+
+        /** About 60 frames a second, and only while the marker is on screen. */
+        const val FRAME_MS = 16
     }
 }

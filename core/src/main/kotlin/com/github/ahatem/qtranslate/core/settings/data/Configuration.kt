@@ -335,6 +335,16 @@ data class Configuration(
     val serviceSelectorAppearance: ServiceSelectorAppearance = ServiceSelectorAppearance.ICONS_AND_TEXT,
 
     // ---- UI — Quick Panel (Popup) ----
+    /**
+     * Whether the translate popup also runs the preset's comparison translators and shows their
+     * results under the primary one.
+     *
+     * Off by default. The popup is a glance at one translation, and with comparison on it grew a
+     * header naming the service, a "Primary" badge and a row per extra translator — a translator
+     * the user may not even know is configured, since switching the primary keeps the previous one
+     * as a comparison member. Off, the popup is the plain single translation it always was.
+     */
+    val isQuickTranslateComparisonEnabled: Boolean = false,
     val isPopupAutoSizeEnabled: Boolean = true,
     val isPopupAutoPositionEnabled: Boolean = true,
     val popupTransparencyPercentage: Int = 5,
@@ -418,6 +428,7 @@ data class Configuration(
                 useUnifiedTitleBar           = true,
                 layoutPresetId               = "classic",
                 toolbarVisibility            = ToolbarVisibility.DEFAULT,
+                isQuickTranslateComparisonEnabled = false,
                 isPopupAutoSizeEnabled       = true,
                 isPopupAutoPositionEnabled   = true,
                 popupTransparencyPercentage  = 5,

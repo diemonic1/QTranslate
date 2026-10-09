@@ -73,8 +73,9 @@ internal fun buildQuickTranslateDialogState(
         primaryBadge = localizer.getString("main_window.comparison_primary"),
         primaryProviderInfo = selectedTranslator,
         comparisonProviderInfos = mainState.availableServices.associateBy { it.id },
-        // Canonical primary only with fewer than two usable translators;
-        // comparison results appear only once Comparison is eligible.
-        comparisonsEnabled = config.isComparisonEligible(mainState.availableTranslatorIds)
+        // Only when the user turned it on for the popup, and only once there are two usable
+        // translators to compare; otherwise the popup is a single plain translation.
+        comparisonsEnabled = config.isQuickTranslateComparisonEnabled &&
+            config.isComparisonEligible(mainState.availableTranslatorIds)
     )
 }

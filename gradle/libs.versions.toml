@@ -54,8 +54,6 @@ miglayout = { module = "com.miglayout:miglayout-swing", version.ref = "miglayout
 
 # Global input is QInput only: JNativeHook/JKeyMaster removed.
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
-# Shares the jna version: the two are released together and must not drift apart.
-jnaPlatform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 qinput = { module = "io.github.ahatem:qinput", version.ref = "qinput" }
 
 

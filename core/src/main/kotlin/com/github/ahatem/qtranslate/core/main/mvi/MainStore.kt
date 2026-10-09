@@ -326,8 +326,13 @@ class MainStore(
         return mainTranslationComparisonPolicy(config.effectiveLayoutPresetId(availableTranslatorIds()))
     }
 
-    private fun quickComparisonPolicy(): ComparisonPolicy =
-        quickTranslationComparisonPolicy(settingsState.value.isComparisonEligible(availableTranslatorIds()))
+    private fun quickComparisonPolicy(): ComparisonPolicy {
+        val config = settingsState.value
+        // Not run at all when the popup is not going to show them: each comparison is a full
+        // translation request, and spending them on results nobody sees would cost quota for nothing.
+        if (!config.isQuickTranslateComparisonEnabled) return ComparisonPolicy.DISABLED
+        return quickTranslationComparisonPolicy(config.isComparisonEligible(availableTranslatorIds()))
+    }
 
     @OptIn(FlowPreview::class)
     private fun observeSpellChecking() {

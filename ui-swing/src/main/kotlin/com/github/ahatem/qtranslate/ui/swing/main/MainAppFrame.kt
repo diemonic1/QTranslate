@@ -292,7 +292,24 @@ class MainAppFrame(
         iconManager,
         localizer.getString("main_window_language_bar.translate_button")
     ) { text ->
-        mainStore.dispatch(MainIntent.ShowQuickTranslate(text))
+        showQuickTranslateAtSelection(text)
+    }
+
+    /**
+     * Opens the translate popup for [text], placed against the selection when the focused
+     * application can say where it is.
+     *
+     * The translation is requested straight away and the selection looked up alongside it: the
+     * popup only appears once the translation is back, which is almost always after the lookup,
+     * so the lookup costs the user nothing. When the lookup loses that race, or the application
+     * cannot answer, the popup falls back to its usual placement.
+     */
+    private fun showQuickTranslateAtSelection(text: String, readSelectionAloud: Boolean = false) {
+        mainStore.dispatch(MainIntent.ShowQuickTranslate(text, readSelectionAloud = readSelectionAloud))
+        appScope.launch {
+            val bounds = SelectionLocator.locate(logger)
+            runOnUi { quickTranslateDialog.anchorToText(bounds) }
+        }
     }
 
     private fun openPluginConfiguration(serviceId: String) {
@@ -350,7 +367,7 @@ class MainAppFrame(
             runOnUi { showAndFocus() }
         },
         onShowQuickTranslate = { text ->
-            appScope.launch { mainStore.dispatch(MainIntent.ShowQuickTranslate(text)) }
+            showQuickTranslateAtSelection(text)
         },
         onListenToText = { text ->
             mainStore.dispatch(MainIntent.ListenToText(TextSource.Input, text))
@@ -394,9 +411,9 @@ class MainAppFrame(
                     SelectionAction.NONE -> Unit
                     SelectionAction.SHOW_ICON -> selectionTranslateButton.showAt(location, text)
                     SelectionAction.TRANSLATE ->
-                        mainStore.dispatch(MainIntent.ShowQuickTranslate(text))
+                        showQuickTranslateAtSelection(text)
                     SelectionAction.TRANSLATE_AND_READ ->
-                        mainStore.dispatch(MainIntent.ShowQuickTranslate(text, readSelectionAloud = true))
+                        showQuickTranslateAtSelection(text, readSelectionAloud = true)
                 }
             }
         },

@@ -39,6 +39,7 @@ class PopupsPanel(
     private lateinit var dictionary: PopupControls
     private lateinit var images: PopupControls
     private lateinit var closeOnClickOutsideCheck: JCheckBox
+    private lateinit var quickComparisonCheck: JCheckBox
 
     init {
         buildUI()
@@ -75,6 +76,11 @@ class PopupsPanel(
             }
         )
         addHint(localizationManager.getString("settings_window.popup_idle_hint"))
+
+        quickComparisonCheck = addCheckbox(
+            localizationManager.getString("settings_window.quick_translate_comparison"), false
+        ) { enabled -> applyDraft(store) { it.copy(isQuickTranslateComparisonEnabled = enabled) } }
+        addHint(localizationManager.getString("settings_window.quick_translate_comparison_hint"))
 
         // ── Dictionary popup ─────────────────────────────────────────────────
         addSubSeparator(localizationManager.getString("settings_window.dict_popup_sub"))
@@ -151,6 +157,7 @@ class PopupsPanel(
             translate.autoPosition.isSelected = c.isPopupAutoPositionEnabled
             translate.transparency.value = c.popupTransparencyPercentage.coerceIn(TRANSPARENCY_MIN, TRANSPARENCY_MAX)
             translate.idleTimeout?.value = c.popupIdleTimeoutSeconds.coerceIn(IDLE_MIN, IDLE_MAX)
+            quickComparisonCheck.isSelected = c.isQuickTranslateComparisonEnabled
 
             dictionary.autoPosition.isSelected = c.isQuickDictionaryAutoPositionEnabled
             dictionary.transparency.value =
